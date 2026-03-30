@@ -1,35 +1,13 @@
 const express = require('express');
 const { protect } = require('../utils/authMiddleware');
-const { Ticket, User } = require('../models');
+const TicketController = require('../controllers/TicketController');
 
 const router = express.Router();
 
 // Create a ticket
-router.post('/', protect, async (req, res) => {
-    try {
-        const { eventId, seatInfo } = req.body;
-        const ticket = await Ticket.create({
-            sellerId: req.user.id,
-            eventId,
-            seatInfo
-        });
-        res.status(201).json(ticket);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
+router.post('/', protect, TicketController.create);
 
 // Get all available tickets
-router.get('/', async (req, res) => {
-    try {
-        const tickets = await Ticket.findAll({
-            where: { status: 'Available' },
-            include: [{ model: User, as: 'seller', attributes: ['name'] }]
-        });
-        res.json(tickets);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
+router.get('/', TicketController.getAvailable);
 
 module.exports = router;

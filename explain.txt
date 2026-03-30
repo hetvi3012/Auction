@@ -1,0 +1,1694 @@
+================================================================================
+         FAIRPLAY AUCTION PLATFORM — COMPREHENSIVE PROJECT DOCUMENTATION
+================================================================================
+
+Generated on: 2026-03-16
+Project: FairPlay Ticket Auction Platform
+Course: Software Engineering (6th Semester)
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+ 1. PROJECT OVERVIEW
+ 2. STAKEHOLDERS
+ 3. TECHNOLOGY STACK
+ 4. ARCHITECTURE DEEP DIVE
+ 5. COMPLETE FILE MAP
+ 6. DATABASE SCHEMA
+ 7. DESIGN PATTERNS — DETAILED EXPLANATION
+ 8. SOLID PRINCIPLES — WHERE THEY APPLY
+ 9. APPLICATION FLOW — STEP BY STEP
+10. BUSINESS LOGIC — EVERY RULE
+11. AUTHENTICATION & ROLE SYSTEM
+12. USE CASES
+13. SEQUENCE DIAGRAMS (TEXT-BASED UML)
+14. TESTING SYSTEM
+15. BUILD SYSTEM
+16. CODE WALKTHROUGH — KEY METHODS
+17. FUTURE DEVELOPMENT SCOPE
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+FairPlay Auctions is a full-stack, real-time ticket auction platform that allows
+users to buy and sell event tickets through competitive bidding. The platform
+supports multiple auction strategies (English and Vickrey), real-time WebSocket
+notifications, automated proxy bidding, and an admin analytics dashboard.
+
+PURPOSE:
+  - Provide a fair, transparent marketplace for event ticket resale.
+  - Demonstrate enterprise-grade software engineering with 10 design patterns.
+  - Implement a layered architecture: Routes → Controllers → Facade → Commands
+    → Services → Repositories → Models.
+
+KEY FEATURES:
+  1. User Registration & Login with JWT authentication
+  2. Ticket listing and management by sellers
+  3. English Auctions (open ascending bid)
+  4. Vickrey Auctions (sealed-bid, second-price)
+  5. Proxy (automatic) bidding engine
+  6. Real-time bid updates via WebSockets (Socket.IO)
+  7. Auction settlement with atomic fund transfer
+  8. Distributed job queues (BullMQ/Redis) for email & PDF receipt
+  9. Admin dashboard with platform analytics
+ 10. Role-Based Access Control (USER / ADMIN)
+
+DESIGN DECISIONS — WHY THIS PROJECT?
+  - Auction platforms are inherently complex: concurrency, real-time events,
+    financial transactions, multiple strategies — making them ideal for
+    demonstrating design patterns and SOLID principles.
+  - The dual-strategy approach (English vs Vickrey) naturally demands the
+    Strategy Pattern.
+  - Real-time bidding demands the Observer Pattern with WebSockets.
+  - Financial settlement demands transactional integrity and the Command Pattern.
+
+================================================================================
+2. STAKEHOLDERS
+================================================================================
+
+STAKEHOLDER 1: TICKET SELLER (Primary User)
+  - Role: Lists event tickets for auction.
+  - Goals: Maximize selling price, quick and secure payment.
+  - Interactions: Register → Create Ticket → Start Auction → Receive funds.
+
+STAKEHOLDER 2: TICKET BUYER / BIDDER (Primary User)
+  - Role: Places bids on active auctions.
+  - Goals: Win tickets at fair prices, real-time bid visibility.
+  - Interactions: Register → Browse Auctions → Place Bid / Set Proxy → Win.
+
+STAKEHOLDER 3: PLATFORM ADMIN (Secondary User)
+  - Role: Monitors platform health and manages auctions.
+  - Goals: See analytics, ensure system integrity.
+  - Interactions: Login (ADMIN role) → View Dashboard → Monitor metrics.
+
+STAKEHOLDER 4: SYSTEM / PLATFORM ITSELF
+  - Role: The automated backend processes.
+  - Goals: Ensure fairness, prevent fraud, handle concurrency.
+  - Interactions: Proxy bidding engine, settlement service, job queues.
+
+================================================================================
+3. TECHNOLOGY STACK
+================================================================================
+
+BACKEND:
+  ┌─────────────────────┬──────────────────────────────────────────────┐
+  │ Component           │ Technology                                   │
+  ├─────────────────────┼──────────────────────────────────────────────┤
+  │ Runtime             │ Node.js                                      │
+  │ Framework           │ Express.js v5.2.1                            │
+  │ Database            │ PostgreSQL (via Sequelize ORM v6.37.8)       │
+  │ Authentication      │ JSON Web Tokens (jsonwebtoken v9.0.3)        │
+  │ Password Hashing    │ bcryptjs v3.0.3                              │
+  │ Real-Time           │ Socket.IO v4.8.3                             │
+  │ Job Queues          │ BullMQ v5.71.0 + IORedis v5.10.0             │
+  │ Module System       │ CommonJS (require/module.exports)            │
+  │ Environment         │ dotenv v17.3.1                               │
+  │ CORS                │ cors v2.8.6                                  │
+  │ DB Driver           │ pg v8.20.0 + pg-hstore v2.3.4               │
+  └─────────────────────┴──────────────────────────────────────────────┘
+
+FRONTEND:
+  ┌─────────────────────┬──────────────────────────────────────────────┐
+  │ Component           │ Technology                                   │
+  ├─────────────────────┼──────────────────────────────────────────────┤
+  │ UI Library          │ React v19.2.4                                │
+  │ Build Tool          │ Vite v8.0.0                                  │
+  │ Styling             │ TailwindCSS v4.2.1                           │
+  │ HTTP Client         │ Axios v1.13.6                                │
+  │ Routing             │ React Router DOM v7.13.1                     │
+  │ Icons               │ Lucide React v0.577.0                        │
+  │ WebSocket Client    │ socket.io-client v4.8.3                      │
+  │ Module System       │ ES Modules (import/export)                   │
+  └─────────────────────┴──────────────────────────────────────────────┘
+
+WHY THESE CHOICES?
+  - Node.js + Express: Non-blocking I/O perfect for real-time auction events.
+  - PostgreSQL: ACID compliance critical for financial transactions.
+  - Sequelize ORM: Provides model associations, migrations, and transactions.
+  - Socket.IO: Bi-directional real-time communication for live bid updates.
+  - BullMQ + Redis: Decouples heavy async tasks (email, PDF) from HTTP cycle.
+  - React + Vite: Modern, fast frontend with hot module replacement.
+  - JWT: Stateless auth scales horizontally without session storage.
+
+================================================================================
+4. ARCHITECTURE DEEP DIVE
+================================================================================
+
+4.1 HIGH-LEVEL ARCHITECTURE
+─────────────────────────────
+
+  ┌─────────────┐      HTTP/WS       ┌──────────────────────────────────┐
+  │   React     │ ◄──────────────────►│         Express Server           │
+  │   Frontend  │                     │                                  │
+  │   (Vite)    │                     │  ┌──────────────────────────────┐│
+  └─────────────┘                     │  │      Routes (thin HTTP)      ││
+                                      │  └────────────┬─────────────────┘│
+                                      │  ┌────────────▼─────────────────┐│
+                                      │  │       Controllers            ││
+                                      │  └────────────┬─────────────────┘│
+                                      │  ┌────────────▼─────────────────┐│
+                                      │  │    Facade (AuctionFacade)    ││
+                                      │  └──┬────┬────┬────┬────┬──────┘│
+                                      │  Cmd  Bldr  Fctry CoR  Decor    │
+                                      │  ┌────────────▼─────────────────┐│
+                                      │  │        Services              ││
+                                      │  │ (Strategy, Observer, Proxy)  ││
+                                      │  └────────────┬─────────────────┘│
+                                      │  ┌────────────▼─────────────────┐│
+                                      │  │     Repositories (DAO)       ││
+                                      │  └────────────┬─────────────────┘│
+                                      │  ┌────────────▼─────────────────┐│
+                                      │  │   Models (Sequelize ORM)     ││
+                                      │  └────────────┬─────────────────┘│
+                                      └───────────────┼──────────────────┘
+                                      ┌───────────────▼──────────────────┐
+                                      │       PostgreSQL Database        │
+                                      └──────────────────────────────────┘
+                                      ┌──────────────────────────────────┐
+                                      │  Redis (BullMQ Job Queues)       │
+                                      │  Email Worker │ PDF Worker       │
+                                      └──────────────────────────────────┘
+
+4.2 LAYERED ARCHITECTURE (DETAILED)
+─────────────────────────────────────
+
+LAYER 1 — ROUTES (Presentation / HTTP Adapter Layer)
+  Files: authRoutes.js, auctionRoutes.js, bidRoutes.js, ticketRoutes.js,
+         adminRoutes.js
+  Purpose: Define HTTP endpoints, apply middleware (auth, RBAC), delegate to
+           controllers. Contain ZERO business logic.
+  Why: Separation of Concerns. Routes should only handle HTTP request/response
+       mapping. This makes endpoints easy to change without touching logic.
+
+LAYER 2 — CONTROLLERS (Application Layer)
+  Files: AuthController.js, AuctionController.js, BidController.js,
+         TicketController.js, AdminController.js
+  Purpose: Extract request parameters, call the Facade or Repositories,
+           format HTTP responses.
+  Why: Controllers act as the glue between HTTP and business logic. They know
+       about req/res but delegate all domain logic to the Facade.
+
+LAYER 3 — FACADE (Orchestration Layer)
+  File: AuctionFacade.js
+  Purpose: Provides a unified, simplified API that orchestrates multiple
+           subsystems (Commands, Repositories, Decorators, Validation Chain).
+  Why: Without the Facade, Controllers would need to coordinate Builders,
+       Factories, Commands, and Validators directly — creating tight coupling.
+       The Facade hides this complexity behind clean methods.
+
+LAYER 4 — COMMANDS / BUILDERS / FACTORIES / DECORATORS / CHAIN
+  Files: PlaceBidCommand.js, SettleAuctionCommand.js, CreateAuctionCommand.js,
+         CommandInvoker.js, AuctionBuilder.js, StrategyFactory.js,
+         AuctionFactory.js, LoggingDecorator.js, ValidationDecorator.js,
+         BidValidationChain.js
+  Purpose: Each pattern handles a specific cross-cutting or construction concern.
+  Why: Detailed in Section 7 (Design Patterns).
+
+LAYER 5 — SERVICES (Domain / Business Logic Layer)
+  Files: AuctionContext.js, AuctionSubject.js, AuctionSettlementService.js,
+         ProxyBiddingEngine.js, WebSocketBroadcaster.js, NotificationService.js,
+         JobQueueService.js, ObserverRegistry.js
+  Purpose: Core business logic — strategy execution, observer management,
+           settlement, proxy bidding, async job dispatch.
+  Why: Business logic must be isolated from HTTP concerns. Services are
+       reusable across routes, commands, and scheduled jobs.
+
+LAYER 6 — REPOSITORIES (Data Access Layer / DAO)
+  Files: BaseRepository.js, UserRepository.js, AuctionRepository.js,
+         BidRepository.js, TicketRepository.js
+  Purpose: Abstract all database queries behind clean method interfaces.
+  Why: Decouples business logic from Sequelize-specific syntax. If the ORM
+       changes, only repositories need updating.
+
+LAYER 7 — MODELS (Data Definition Layer)
+  Files: User.js, Auction.js, Bid.js, Ticket.js, ProxyBidLimit.js, index.js
+  Purpose: Define database table schemas, associations, hooks, and validations.
+  Why: Sequelize models map directly to PostgreSQL tables.
+
+================================================================================
+5. COMPLETE FILE MAP
+================================================================================
+
+d:\6th sem\Software\Project\
+│
+├── backend\
+│   ├── .env                          # Environment variables (DB, JWT secret)
+│   ├── app.js                        # Express app setup, middleware, routes
+│   ├── server.js                     # HTTP server, Socket.IO, DB sync
+│   ├── package.json                  # Backend dependencies
+│   │
+│   ├── config\
+│   │   └── db.js                     # Sequelize PostgreSQL connection
+│   │
+│   ├── models\                       # DATA DEFINITION LAYER
+│   │   ├── index.js                  # Model associations & exports
+│   │   ├── User.js                   # User schema (name, email, password, wallet, role)
+│   │   ├── Auction.js                # Auction schema (ticket, strategy, price, status)
+│   │   ├── Bid.js                    # Bid schema (auction, bidder, amount)
+│   │   ├── Ticket.js                 # Ticket schema (seller, event, seat, status)
+│   │   └── ProxyBidLimit.js          # Proxy bid limit schema (auction, bidder, max)
+│   │
+│   ├── repositories\                 # DATA ACCESS LAYER (Repository Pattern)
+│   │   ├── BaseRepository.js         # Generic CRUD operations
+│   │   ├── UserRepository.js         # findByEmail(), updateWallet()
+│   │   ├── AuctionRepository.js      # findActiveAuctions(), getTotalVolume()
+│   │   ├── BidRepository.js          # findByAuction(), findHighestBid()
+│   │   └── TicketRepository.js       # findAvailableTickets()
+│   │
+│   ├── services\                     # BUSINESS LOGIC LAYER
+│   │   ├── AuctionContext.js         # Strategy context (uses StrategyFactory)
+│   │   ├── EnglishAuctionStrategy.js # English auction rules
+│   │   ├── VickreyAuctionStrategy.js # Vickrey (sealed-bid) auction rules
+│   │   ├── AuctionSubject.js         # Observer subject (notifies observers)
+│   │   ├── WebSocketBroadcaster.js   # Observer: broadcasts via Socket.IO
+│   │   ├── NotificationService.js    # Observer: logs notification events
+│   │   ├── ObserverRegistry.js       # Registers all observers
+│   │   ├── AuctionSettlementService.js # Settlement with transactions
+│   │   ├── ProxyBiddingEngine.js     # Automated proxy bidding logic
+│   │   └── JobQueueService.js        # BullMQ email & PDF job queues
+│   │
+│   ├── factories\                    # FACTORY PATTERN
+│   │   ├── StrategyFactory.js        # Maps strategy type → strategy instance
+│   │   └── AuctionFactory.js         # Creates Auction + updates Ticket
+│   │
+│   ├── builders\                     # BUILDER PATTERN
+│   │   └── AuctionBuilder.js         # Fluent API for auction config
+│   │
+│   ├── commands\                     # COMMAND PATTERN
+│   │   ├── PlaceBidCommand.js        # Encapsulates bid placement
+│   │   ├── SettleAuctionCommand.js   # Encapsulates auction settlement
+│   │   ├── CreateAuctionCommand.js   # Encapsulates auction creation
+│   │   └── CommandInvoker.js         # Dispatches commands, logs history
+│   │
+│   ├── decorators\                   # DECORATOR PATTERN
+│   │   ├── LoggingDecorator.js       # Wraps services with logging (ES6 Proxy)
+│   │   └── ValidationDecorator.js    # Pre-validation for bid placement
+│   │
+│   ├── middleware\                    # CHAIN OF RESPONSIBILITY
+│   │   └── BidValidationChain.js     # 4-handler validation pipeline
+│   │
+│   ├── facades\                      # FACADE PATTERN
+│   │   └── AuctionFacade.js          # Unified API for all operations
+│   │
+│   ├── controllers\                  # APPLICATION LAYER
+│   │   ├── AuthController.js         # register(), login()
+│   │   ├── AuctionController.js      # create(), getActive(), close()
+│   │   ├── BidController.js          # placeBid(), setProxyLimit()
+│   │   ├── TicketController.js       # create(), getAvailable()
+│   │   └── AdminController.js        # getAnalytics()
+│   │
+│   ├── routes\                       # HTTP ADAPTER LAYER
+│   │   ├── authRoutes.js             # POST /register, /login
+│   │   ├── auctionRoutes.js          # POST /, GET /, POST /:id/close
+│   │   ├── bidRoutes.js              # POST /, POST /proxy
+│   │   ├── ticketRoutes.js           # POST /, GET /
+│   │   └── adminRoutes.js            # GET /analytics
+│   │
+│   └── utils\                        # MIDDLEWARE
+│       ├── authMiddleware.js          # JWT verification middleware
+│       └── roleMiddleware.js          # RBAC admin guard middleware
+│
+├── frontend\
+│   ├── index.html                    # HTML entry point
+│   ├── vite.config.js                # Vite configuration
+│   ├── package.json                  # Frontend dependencies
+│   │
+│   └── src\
+│       ├── main.jsx                  # React entry point
+│       ├── App.jsx                   # Router & page layout
+│       ├── index.css                 # Global styles
+│       ├── App.css                   # App-level styles
+│       │
+│       ├── components\
+│       │   └── Navbar.jsx            # Navigation bar with auth state
+│       │
+│       ├── pages\
+│       │   ├── Home.jsx              # Landing page
+│       │   ├── Login.jsx             # Login form
+│       │   ├── Register.jsx          # Registration form
+│       │   ├── Auctions.jsx          # Active auctions list + bidding
+│       │   ├── SellTicket.jsx        # Ticket creation + auction start
+│       │   └── AdminDashboard.jsx    # Admin analytics panel
+│       │
+│       ├── services\
+│       │   └── api.js                # Axios API client + service modules
+│       │
+│       └── utils\
+│           └── useSocket.js          # WebSocket hook for real-time bids
+│
+├── explain.txt                       # THIS FILE
+├── implementation_plan.md            # Architecture implementation plan
+├── project_documentation.md          # Additional project docs
+└── system_design_document.md         # System design document
+
+================================================================================
+6. DATABASE SCHEMA
+================================================================================
+
+6.1 ENTITY-RELATIONSHIP DIAGRAM (TEXT)
+───────────────────────────────────────
+
+  ┌──────────────┐        ┌──────────────────┐        ┌──────────────┐
+  │     USER     │        │     TICKET       │        │   AUCTION    │
+  ├──────────────┤        ├──────────────────┤        ├──────────────┤
+  │ id (PK,UUID) │──┐     │ id (PK, UUID)    │──┐     │ id (PK,UUID) │
+  │ name         │  │     │ sellerId (FK)    │  │     │ ticketId(FK) │
+  │ email (UNQ)  │  ├────►│ eventId          │  ├────►│ strategyType │
+  │ passwordHash │  │     │ seatInfo (JSONB) │  │     │ startingPrice│
+  │ walletBalance│  │     │ status           │  │     │ currentHigh  │
+  │ isVerified   │  │     │ createdAt        │  │     │ winBidderId  │
+  │ role (ENUM)  │  │     │ updatedAt        │  │     │ status       │
+  │ createdAt    │  │     └──────────────────┘  │     │ startTime    │
+  │ updatedAt    │  │                           │     │ endTime      │
+  └──────────────┘  │     ┌──────────────────┐  │     │ createdAt    │
+                    │     │      BID         │  │     │ updatedAt    │
+                    │     ├──────────────────┤  │     └──────────────┘
+                    │     │ id (PK, UUID)    │  │           │
+                    ├────►│ auctionId (FK)   │◄─┘           │
+                    │     │ bidderId (FK)    │              │
+                    │     │ amount           │◄─────────────┘
+                    │     │ timestamp        │
+                    │     │ createdAt        │
+                    │     │ updatedAt        │
+                    │     └──────────────────┘
+                    │
+                    │     ┌──────────────────┐
+                    │     │  PROXY_BID_LIMIT │
+                    │     ├──────────────────┤
+                    └────►│ id (PK, UUID)    │
+                          │ auctionId (FK)   │
+                          │ bidderId (FK)    │
+                          │ maxWillingToPay  │
+                          │ createdAt        │
+                          │ updatedAt        │
+                          └──────────────────┘
+
+6.2 TABLE DETAILS
+──────────────────
+
+TABLE: Users
+  ┌─────────────────┬──────────────┬──────────────────────────────────┐
+  │ Column          │ Type         │ Constraints                      │
+  ├─────────────────┼──────────────┼──────────────────────────────────┤
+  │ id              │ UUID         │ PK, auto-generated (UUIDv4)      │
+  │ name            │ STRING       │ NOT NULL                         │
+  │ email           │ STRING       │ NOT NULL, UNIQUE                 │
+  │ passwordHash    │ STRING       │ NOT NULL, bcrypt hashed           │
+  │ walletBalance   │ FLOAT        │ DEFAULT 0                        │
+  │ isVerified      │ BOOLEAN      │ DEFAULT false                    │
+  │ role            │ ENUM         │ 'USER' | 'ADMIN', DEFAULT 'USER' │
+  │ createdAt       │ TIMESTAMP    │ Auto-managed by Sequelize        │
+  │ updatedAt       │ TIMESTAMP    │ Auto-managed by Sequelize        │
+  └─────────────────┴──────────────┴──────────────────────────────────┘
+  Hooks: beforeSave — auto-hashes passwordHash via bcrypt if changed.
+  Methods: matchPassword(entered) — compares bcrypt hash.
+
+TABLE: Tickets
+  ┌─────────────────┬──────────────┬────────────────────────────────────┐
+  │ Column          │ Type         │ Constraints                        │
+  ├─────────────────┼──────────────┼────────────────────────────────────┤
+  │ id              │ UUID         │ PK, auto-generated                 │
+  │ sellerId        │ UUID         │ FK → Users.id, NOT NULL            │
+  │ eventId         │ STRING       │ NOT NULL                           │
+  │ seatInfo        │ JSONB        │ PostgreSQL JSON (row, seat, etc.)  │
+  │ status          │ ENUM         │ 'Available'|'In_Auction'|'Sold'    │
+  │ createdAt       │ TIMESTAMP    │ Auto                               │
+  │ updatedAt       │ TIMESTAMP    │ Auto                               │
+  └─────────────────┴──────────────┴────────────────────────────────────┘
+
+TABLE: Auctions
+  ┌─────────────────┬──────────────┬────────────────────────────────────┐
+  │ Column          │ Type         │ Constraints                        │
+  ├─────────────────┼──────────────┼────────────────────────────────────┤
+  │ id              │ UUID         │ PK, auto-generated                 │
+  │ ticketId        │ UUID         │ FK → Tickets.id, NOT NULL          │
+  │ strategyType    │ ENUM         │ 'English' | 'Vickrey', NOT NULL    │
+  │ startingPrice   │ FLOAT        │ NOT NULL                           │
+  │ currentHighestBid│ FLOAT       │ NOT NULL                           │
+  │ winningBidderId │ UUID         │ FK → Users.id, NULLABLE            │
+  │ status          │ ENUM         │ 'Active'|'Closed'|'Pending'        │
+  │ startTime       │ DATE         │ DEFAULT NOW                        │
+  │ endTime         │ DATE         │ NOT NULL                           │
+  │ createdAt       │ TIMESTAMP    │ Auto                               │
+  │ updatedAt       │ TIMESTAMP    │ Auto                               │
+  └─────────────────┴──────────────┴────────────────────────────────────┘
+
+TABLE: Bids
+  ┌─────────────────┬──────────────┬────────────────────────────────────┐
+  │ Column          │ Type         │ Constraints                        │
+  ├─────────────────┼──────────────┼────────────────────────────────────┤
+  │ id              │ UUID         │ PK, auto-generated                 │
+  │ auctionId       │ UUID         │ FK → Auctions.id, NOT NULL         │
+  │ bidderId        │ UUID         │ FK → Users.id, NOT NULL            │
+  │ amount          │ FLOAT        │ NOT NULL                           │
+  │ timestamp       │ DATE         │ DEFAULT NOW                        │
+  │ createdAt       │ TIMESTAMP    │ Auto                               │
+  │ updatedAt       │ TIMESTAMP    │ Auto                               │
+  └─────────────────┴──────────────┴────────────────────────────────────┘
+  Indexes: Composite index on (auctionId, amount) for fast bid lookups.
+
+TABLE: ProxyBidLimits
+  ┌─────────────────┬──────────────┬────────────────────────────────────┐
+  │ Column          │ Type         │ Constraints                        │
+  ├─────────────────┼──────────────┼────────────────────────────────────┤
+  │ id              │ UUID         │ PK, auto-generated                 │
+  │ auctionId       │ UUID         │ FK → Auctions.id, NOT NULL         │
+  │ bidderId        │ UUID         │ FK → Users.id, NOT NULL            │
+  │ maxWillingToPay │ FLOAT        │ NOT NULL                           │
+  │ createdAt       │ TIMESTAMP    │ Auto                               │
+  │ updatedAt       │ TIMESTAMP    │ Auto                               │
+  └─────────────────┴──────────────┴────────────────────────────────────┘
+  Indexes: UNIQUE constraint on (auctionId, bidderId).
+
+6.3 ASSOCIATIONS
+─────────────────
+  User    1──►N  Ticket        (sellerId)
+  User    1──►N  Bid           (bidderId)
+  User    1──►N  Auction       (winningBidderId)
+  User    1──►N  ProxyBidLimit (bidderId)
+  Ticket  1──►1  Auction       (ticketId)
+  Auction 1──►N  Bid           (auctionId)
+  Auction 1──►N  ProxyBidLimit (auctionId)
+
+================================================================================
+7. DESIGN PATTERNS — DETAILED EXPLANATION
+================================================================================
+
+The project implements 10 design patterns. Below is a deep analysis of each.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 1: STRATEGY PATTERN (Behavioral)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Defines a family of algorithms, encapsulates each one, and makes them
+      interchangeable. The algorithm varies independently from clients.
+
+WHY IT IS USED:
+  The platform supports two fundamentally different auction types:
+  - English Auction: Open ascending price. Highest bidder wins at their price.
+  - Vickrey Auction: Sealed bid. Highest bidder wins but pays SECOND highest.
+  These have different bid validation rules and different winner determination
+  logic. Without Strategy, we'd need if/else branches scattered everywhere.
+
+WHERE IT IS APPLIED:
+  - AuctionContext.js          — The Context class. Holds a reference to the
+                                 current strategy and delegates calls.
+  - EnglishAuctionStrategy.js  — Concrete Strategy A.
+  - VickreyAuctionStrategy.js  — Concrete Strategy B.
+
+HOW IT WORKS:
+  1. When a bid is placed, the system reads auction.strategyType ('English'
+     or 'Vickrey') from the database.
+  2. AuctionContext.setStrategy(type) is called, which uses StrategyFactory
+     to instantiate the correct strategy.
+  3. AuctionContext.validateBid() delegates to the strategy's validateBid().
+  4. AuctionContext.determineWinnerAndPrice() delegates to the strategy's
+     determineWinnerAndPrice().
+
+DESIGN DECISION:
+  - English: newBid must be > currentHighestBid AND user must have balance.
+  - Vickrey: newBid just needs to be > 0 AND user must have balance (sealed).
+  - English winner pays their bid; Vickrey winner pays 2nd highest bid.
+
+CLASS DIAGRAM:
+  ┌─────────────────┐     uses     ┌──────────────────────┐
+  │  AuctionContext  │────────────►│ <<interface>>         │
+  │                  │             │ AuctionStrategy       │
+  │ -strategy        │             │ +validateBid()        │
+  │ +setStrategy()   │             │ +determineWinner()    │
+  │ +validateBid()   │             └──────────┬────────────┘
+  │ +determineWinner()│                       │
+  └─────────────────┘               ┌────────┴────────┐
+                                    │                 │
+                          ┌─────────▼──────┐ ┌───────▼──────────┐
+                          │ EnglishAuction │ │ VickreyAuction   │
+                          │ Strategy       │ │ Strategy         │
+                          │ +validateBid() │ │ +validateBid()   │
+                          │ +determineWin()│ │ +determineWin()  │
+                          └────────────────┘ └──────────────────┘
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 2: OBSERVER PATTERN (Behavioral)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Defines a one-to-many dependency. When the subject changes state, all
+      dependent observers are notified automatically.
+
+WHY IT IS USED:
+  When a bid is placed or an auction closes, multiple systems need to react:
+  - WebSocket: Broadcast to connected clients in real-time.
+  - Notification: Log alerts for email/push notification.
+  - Future: Email service, analytics tracker, audit logger.
+  Without Observer, the bid-placement code would need to know about every
+  system that cares about bids — tight coupling.
+
+WHERE IT IS APPLIED:
+  - AuctionSubject.js         — Subject: maintains a list of observers.
+  - WebSocketBroadcaster.js   — Observer A: broadcasts via Socket.IO.
+  - NotificationService.js    — Observer B: logs notification events.
+  - ObserverRegistry.js       — Wiring: registers observers with subject.
+
+HOW IT WORKS:
+  1. On server start, ObserverRegistry.initObservers(io) is called.
+  2. It creates WebSocketBroadcaster and NotificationService instances.
+  3. Both are registered with AuctionSubject.addObserver().
+  4. When a bid is placed: AuctionSubject.notifyNewBid(data) is called.
+  5. AuctionSubject iterates all observers, calling observer.onNewBid(data).
+  6. Each observer handles the event independently.
+
+DESIGN DECISION:
+  Observers implement a duck-typing interface: onNewBid() and onAuctionClosed().
+  The Subject checks if the method exists before calling it, providing safety.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 3: SINGLETON PATTERN (Creational)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Ensures a class has only one instance and provides a global access point.
+
+WHY IT IS USED:
+  Certain services must be shared across the entire application:
+  - AuctionContext: One strategy context for all requests.
+  - AuctionSubject: One event hub for all observers.
+  - AuctionSettlementService: Stateless but unique.
+  - CommandInvoker: One invoker with a shared command history.
+  - All Repositories: One instance per model type.
+
+WHERE IT IS APPLIED:
+  Every file that does `module.exports = new ClassName()` is a Singleton:
+  - AuctionContext.js, AuctionSubject.js, AuctionSettlementService.js,
+    ProxyBiddingEngine.js, AuctionFacade.js, CommandInvoker.js,
+    StrategyFactory.js, AuctionFactory.js, UserRepository.js,
+    AuctionRepository.js, BidRepository.js, TicketRepository.js.
+
+HOW IT WORKS:
+  Node.js caches modules after first require(). When we export `new Class()`,
+  every file that requires it gets the same instance.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 4: FACTORY PATTERN (Creational)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Creates objects without exposing instantiation logic to the client.
+
+WHY IT IS USED:
+  - StrategyFactory: The AuctionContext previously had an if/else chain to
+    create strategies. The factory encapsulates this, making it open for
+    extension (add a new strategy type without modifying AuctionContext).
+  - AuctionFactory: Auction creation involves multiple steps (validate ticket,
+    create record, update ticket status). The factory centralises this.
+
+WHERE IT IS APPLIED:
+  - StrategyFactory.js — Maps string types to strategy class constructors.
+  - AuctionFactory.js  — Creates Auction + updates Ticket atomically.
+
+HOW IT WORKS (StrategyFactory):
+  1. Internally maintains a Map: { 'English' → EnglishAuctionStrategy,
+     'Vickrey' → VickreyAuctionStrategy }.
+  2. createStrategy(type) looks up the Map and returns new StrategyClass().
+  3. registerStrategy(type, Class) allows adding new strategies at runtime.
+
+DESIGN DECISION:
+  Using a Map instead of if/else allows runtime extensibility. A new auction
+  type (e.g., 'Dutch') can be registered without modifying existing code.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 5: BUILDER PATTERN (Creational)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Separates construction of a complex object from its representation,
+      allowing the same construction process to create different representations.
+
+WHY IT IS USED:
+  An Auction requires multiple validated fields: ticketId, strategyType,
+  startingPrice, endTime. The Builder provides:
+  1. Fluent API: Readable, chainable configuration.
+  2. Validation at each step: Strategy type is validated against registered
+     strategies, price must be positive, endTime must be in the future.
+  3. Immutable output: build() returns a frozen config object.
+
+WHERE IT IS APPLIED:
+  - AuctionBuilder.js — Fluent builder for auction configuration.
+
+HOW IT WORKS:
+  const config = new AuctionBuilder()
+      .setTicket(ticketId)
+      .setStrategy('English')
+      .setStartingPrice(100)
+      .setEndTime('2026-04-01T00:00:00Z')
+      .build();
+  // config = { ticketId, strategyType, startingPrice, endTime } (frozen)
+
+DESIGN DECISION:
+  The Builder produces a config object, NOT the Auction entity itself.
+  The config is then passed to AuctionFactory.createAuction() for actual
+  database creation. This separates validation from persistence.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 6: REPOSITORY PATTERN (Structural / Architectural)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Mediates between the domain and data mapping layers, acting like an
+      in-memory collection of domain objects.
+
+WHY IT IS USED:
+  Without repositories, services directly call Sequelize methods:
+    Auction.findAll({ where: { status: 'Active' } })
+  This creates tight coupling to Sequelize. If we switch ORMs or add caching,
+  every service file changes. Repositories provide a clean abstraction:
+    auctionRepo.findActiveAuctions()
+
+WHERE IT IS APPLIED:
+  - BaseRepository.js   — Generic CRUD: findById, findAll, create, update, delete
+  - UserRepository.js   — findByEmail(), updateWallet(), getTotalUsers()
+  - AuctionRepository.js — findActiveAuctions(), findByIdForUpdate(), getTotalVolume()
+  - BidRepository.js    — findByAuction(), findHighestBid()
+  - TicketRepository.js — findAvailableTickets(), findWithSeller()
+
+HOW IT WORKS:
+  BaseRepository accepts a Sequelize model in its constructor and provides
+  generic CRUD. Domain repositories extend it with specific queries.
+
+DESIGN DECISION:
+  Inheritance (extends BaseRepository) is used because all repositories share
+  identical CRUD logic. Only the domain-specific queries differ.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 7: COMMAND PATTERN (Behavioral)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Encapsulates a request as an object, thereby letting you parameterise
+      clients with different requests, queue or log requests, and support undo.
+
+WHY IT IS USED:
+  Each major business operation (place bid, settle auction, create auction) is
+  a complex, multi-step transaction. Encapsulating them as commands provides:
+  1. Uniform dispatch via CommandInvoker.
+  2. Audit history — every command execution is logged.
+  3. Future undo/redo capability (undo() stubs exist).
+  4. Ability to queue commands for batch processing.
+
+WHERE IT IS APPLIED:
+  - PlaceBidCommand.js       — execute(): full bid flow + proxy processing.
+  - SettleAuctionCommand.js  — execute(): delegatesto SettlementService.
+  - CreateAuctionCommand.js  — execute(): Builder → Factory.
+  - CommandInvoker.js        — executeCommand(cmd): runs cmd.execute(),
+                                logs timestamp, status, errors in history[].
+
+HOW IT WORKS:
+  const cmd = new PlaceBidCommand(auctionId, 500, userId);
+  const result = await CommandInvoker.executeCommand(cmd);
+  // Invoker logs: { command: 'PlaceBidCommand', timestamp, status: 'SUCCESS' }
+
+DESIGN DECISION:
+  Commands own their transactional logic. PlaceBidCommand manages its own
+  Sequelize transaction internally, committing on success, rolling back on error.
+  This makes each command completely self-contained.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 8: DECORATOR PATTERN (Structural)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Attaches additional responsibilities to an object dynamically, providing
+      a flexible alternative to subclassing for extending functionality.
+
+WHY IT IS USED:
+  Cross-cutting concerns like logging and validation should not be mixed into
+  core business logic. Decorators wrap services transparently:
+  - LoggingDecorator: Adds entry/exit logging to ANY service without modifying it.
+  - ValidationDecorator: Adds pre-validation checks before bid placement.
+
+WHERE IT IS APPLIED:
+  - LoggingDecorator.js     — Uses ES6 Proxy to intercept all method calls.
+  - ValidationDecorator.js  — Static method validateBidPreconditions().
+
+HOW IT WORKS (LoggingDecorator):
+  // Wrap any service:
+  const loggedRepo = LoggingDecorator.wrap(AuctionRepository, 'AuctionRepo');
+  // Now every call like loggedRepo.findActiveAuctions() prints:
+  //   [LOG][AuctionRepo] ▶ findActiveAuctions() called at 2026-03-16T...
+  //   [LOG][AuctionRepo] ◀ findActiveAuctions() completed successfully.
+
+  The ES6 Proxy intercepts get operations. When the accessed property is a
+  function, it returns a wrapper that logs before/after calling the original.
+
+DESIGN DECISION:
+  ES6 Proxy was chosen over class inheritance because:
+  1. It can wrap ANY object without knowing its class.
+  2. No need to manually override every method.
+  3. New methods added to the original service are automatically logged.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 9: CHAIN OF RESPONSIBILITY PATTERN (Behavioral)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Passes a request along a chain of handlers. Each handler decides to
+      process the request OR pass it to the next handler in the chain.
+
+WHY IT IS USED:
+  Bid validation involves multiple independent checks:
+  1. Is the auction active?
+  2. Has the auction expired?
+  3. Does the user have enough wallet balance?
+  4. Is the bid amount above the minimum?
+  Instead of one monolithic validation function, each check is a separate
+  handler. This makes it easy to add/remove/reorder checks.
+
+WHERE IT IS APPLIED:
+  - BidValidationChain.js — Contains:
+    - BaseBidHandler (abstract): setNext(), handle()
+    - AuctionActiveHandler: Checks auction exists and is Active.
+    - AuctionNotExpiredHandler: Checks auction.endTime > now.
+    - SufficientBalanceHandler: Checks user.walletBalance >= amount.
+    - MinimumBidHandler: Checks amount > currentHighestBid (English).
+    - buildBidValidationChain(): Links handlers into a chain.
+
+HOW IT WORKS:
+  const chain = buildBidValidationChain();
+  // Links: Active → NotExpired → Balance → MinBid
+  await chain.handle({ auction, user, amount });
+  // Each handler checks its concern.
+  // If valid, calls super.handle(request) → next handler.
+  // If invalid, throws a descriptive error immediately.
+
+DESIGN DECISION:
+  Each handler logs a success message (e.g., "✓ AuctionActiveHandler passed")
+  for debugging. The chain stops on the first failure — fail-fast design.
+
+─────────────────────────────────────────────────────────────────────────────────
+PATTERN 10: FACADE PATTERN (Structural)
+─────────────────────────────────────────────────────────────────────────────────
+
+WHAT: Provides a simplified interface to a complex subsystem.
+
+WHY IT IS USED:
+  Without the Facade, controllers would need to coordinate:
+  - AuctionBuilder + AuctionFactory + AuctionRepository (for creation)
+  - ValidationDecorator + BidValidationChain + PlaceBidCommand + CommandInvoker
+    (for bidding)
+  - SettleAuctionCommand + CommandInvoker (for settlement)
+  This is too much coupling. AuctionFacade wraps it all behind clean methods.
+
+WHERE IT IS APPLIED:
+  - AuctionFacade.js — Methods:
+    - createAuction(params, sellerId)
+    - placeBid(auctionId, amount, userId)
+    - settleAuction(auctionId)
+    - setProxyBidLimit(auctionId, userId, max)
+    - getActiveAuctions()
+    - getAnalytics()
+    - createTicket(data, sellerId)
+    - getAvailableTickets()
+
+HOW IT WORKS:
+  // Controller calls a single method:
+  const result = await AuctionFacade.placeBid(auctionId, 500, userId);
+
+  // Internally, the Facade orchestrates:
+  // 1. ValidationDecorator.validateBidPreconditions()
+  // 2. buildBidValidationChain().handle()
+  // 3. new PlaceBidCommand() → CommandInvoker.executeCommand()
+  // 4. Command internally: transaction → strategy validation → bid creation
+  //    → proxy engine → commit → observer notification
+
+DESIGN DECISION:
+  The Facade also wraps repositories with LoggingDecorator on construction,
+  giving automatic logging for all data access operations.
+
+================================================================================
+8. SOLID PRINCIPLES — WHERE THEY APPLY
+================================================================================
+
+S — SINGLE RESPONSIBILITY PRINCIPLE
+─────────────────────────────────────
+   "A class should have only one reason to change."
+
+   APPLIED IN:
+   1. Routes: Only handle HTTP mapping.
+   2. Controllers: Only extract params and format responses.
+   3. AuctionFacade: Only orchestrates subsystems.
+   4. Commands: Each encapsulates exactly one business operation.
+   5. Repositories: Only handle data access for one model.
+   6. Strategies: Each handles rules for one auction type.
+   7. Observers: Each handles one notification channel.
+
+   EXAMPLE: PlaceBidCommand only knows how to place a bid. It does not
+   know about HTTP, does not format JSON responses, and does not know
+   about the Observer pattern. Those are separate responsibilities.
+
+O — OPEN/CLOSED PRINCIPLE
+──────────────────────────
+   "Open for extension, closed for modification."
+
+   APPLIED IN:
+   1. StrategyFactory: New auction types can be added by calling
+      StrategyFactory.registerStrategy('Dutch', DutchStrategy) without
+      modifying any existing code.
+   2. AuctionSubject (Observer): New observers can be added in
+      ObserverRegistry without modifying AuctionSubject, Commands, or Services.
+   3. BidValidationChain: New handlers can be inserted into the chain
+      without modifying existing handlers.
+   4. BaseRepository: New domain repositories extend it without modifying it.
+
+   EXAMPLE: To add a "Dutch Auction" strategy:
+     1. Create DutchAuctionStrategy.js with validateBid() & determineWinner().
+     2. Call StrategyFactory.registerStrategy('Dutch', DutchAuctionStrategy).
+     3. Zero modifications to AuctionContext, AuctionFacade, or any Command.
+
+L — LISKOV SUBSTITUTION PRINCIPLE
+──────────────────────────────────
+   "Subtypes must be substitutable for their base types."
+
+   APPLIED IN:
+   1. EnglishAuctionStrategy and VickreyAuctionStrategy are interchangeable.
+      AuctionContext works identically with either one.
+   2. All domain repositories (UserRepo, AuctionRepo, etc.) can be used
+      anywhere a BaseRepository is expected.
+   3. All bid validation handlers (Active, NotExpired, Balance, MinBid)
+      can stand in for BaseBidHandler.
+
+   EXAMPLE: AuctionContext.validateBid() works correctly regardless of
+   whether the strategy is English or Vickrey. The interface contract
+   (validateBid returns true or throws) is consistent.
+
+I — INTERFACE SEGREGATION PRINCIPLE
+─────────────────────────────────────
+   "No client should be forced to depend on methods it does not use."
+
+   APPLIED IN:
+   1. Observers only implement the methods they need (onNewBid, onAuctionClosed).
+      AuctionSubject checks `typeof observer.onNewBid === 'function'` before
+      calling, so observers can implement only what they care about.
+   2. Controllers only expose the HTTP methods relevant to their domain.
+      AuctionController has create/getActive/close, not analytics.
+   3. Repositories only expose queries relevant to their model.
+
+D — DEPENDENCY INVERSION PRINCIPLE
+─────────────────────────────────────
+   "High-level modules should not depend on low-level modules. Both should
+    depend on abstractions."
+
+   APPLIED IN:
+   1. Controllers depend on AuctionFacade (abstraction), not on Commands,
+      Repositories, or Services directly.
+   2. AuctionContext depends on the strategy interface (validateBid,
+      determineWinnerAndPrice), not on concrete strategy classes.
+   3. AuctionSubject depends on the observer interface (onNewBid,
+      onAuctionClosed), not on WebSocketBroadcaster or NotificationService.
+   4. CommandInvoker depends on the command interface (execute()), not on
+      any specific command class.
+
+================================================================================
+9. APPLICATION FLOW — STEP BY STEP
+================================================================================
+
+FLOW 1: USER REGISTRATION
+──────────────────────────
+  1. User fills out the Register form (frontend: Register.jsx).
+  2. Frontend calls authService.register({ name, email, password }).
+  3. Axios POST → /api/auth/register.
+  4. authRoutes.js → AuthController.register().
+  5. AuthController calls UserRepository.findByEmail(email).
+  6. If user exists → 400 "User already exists".
+  7. If not → UserRepository.create({ name, email, passwordHash, walletBalance:1000 }).
+  8. Sequelize beforeSave hook auto-hashes the password via bcrypt.
+  9. JWT token generated: jwt.sign({ id }, JWT_SECRET, { expiresIn: '30d' }).
+ 10. Response: { id, name, email, walletBalance, token }.
+ 11. Frontend stores user data + token in localStorage.
+
+FLOW 2: USER LOGIN
+───────────────────
+  1. User fills Login form (Login.jsx).
+  2. Frontend calls authService.login({ email, password }).
+  3. Axios POST → /api/auth/login.
+  4. authRoutes.js → AuthController.login().
+  5. UserRepository.findByEmail(email).
+  6. If found → user.matchPassword(password) compares bcrypt hash.
+  7. If match → Return { id, name, email, walletBalance, token }.
+  8. If no match → 401 "Invalid email or password".
+
+FLOW 3: CREATE TICKET
+──────────────────────
+  1. Seller fills form in SellTicket.jsx (eventId, seatInfo).
+  2. Frontend calls ticketService.createTicket({ eventId, seatInfo }).
+  3. Axios POST → /api/tickets (with Bearer token header).
+  4. authMiddleware.protect verifies JWT → attaches req.user.
+  5. ticketRoutes.js → TicketController.create().
+  6. TicketController calls AuctionFacade.createTicket({ eventId, seatInfo }, sellerId).
+  7. AuctionFacade delegates to TicketRepository.create().
+  8. Sequelize inserts Ticket row with status 'Available'.
+  9. Response: ticket object.
+
+FLOW 4: CREATE AUCTION
+───────────────────────
+  1. Seller selects ticket, strategy type, starting price, end time.
+  2. Frontend calls auctionService.createAuction(data).
+  3. Axios POST → /api/auctions (with Bearer token).
+  4. authMiddleware verifies JWT.
+  5. auctionRoutes.js → AuctionController.create().
+  6. AuctionController calls AuctionFacade.createAuction(params, userId).
+  7. Facade creates CreateAuctionCommand → CommandInvoker.executeCommand().
+  8. Command.execute():
+     a. AuctionBuilder.setTicket().setStrategy().setPrice().setEndTime().build()
+        → Validates all fields, returns frozen config.
+     b. AuctionFactory.createAuction(config, sellerId)
+        → Validates ticket ownership, ticket.status === 'Available'.
+        → Creates Auction record with status 'Active'.
+        → Updates Ticket status to 'In_Auction'.
+  9. CommandInvoker logs: { command: 'CreateAuctionCommand', status: 'SUCCESS' }.
+ 10. Response: auction object.
+
+FLOW 5: PLACE A BID
+────────────────────
+  1. Buyer enters bid amount on Auctions.jsx.
+  2. Frontend calls bidService.placeBid({ auctionId, amount }).
+  3. Axios POST → /api/bids (with Bearer token).
+  4. authMiddleware verifies JWT.
+  5. bidRoutes.js → BidController.placeBid().
+  6. BidController calls AuctionFacade.placeBid(auctionId, amount, userId).
+  7. Facade Step 1: ValidationDecorator.validateBidPreconditions()
+     → Checks: amount > 0, auction exists, auction active, not expired,
+       user exists, sufficient wallet balance.
+  8. Facade Step 2: BidValidationChain.handle()
+     → AuctionActiveHandler ✓ → AuctionNotExpiredHandler ✓
+     → SufficientBalanceHandler ✓ → MinimumBidHandler ✓
+  9. Facade Step 3: PlaceBidCommand → CommandInvoker.executeCommand().
+ 10. Command.execute():
+     a. BEGIN TRANSACTION
+     b. Lock auction row (SELECT ... FOR UPDATE).
+     c. Re-verify auction active and not expired.
+     d. AuctionContext.setStrategy() → StrategyFactory.createStrategy().
+     e. Strategy.validateBid(currentHighest, amount, walletBalance).
+     f. Update auction.currentHighestBid and auction.winningBidderId.
+     g. Bid.create() — insert bid record.
+     h. ProxyBiddingEngine.processProxyBids() — auto-escalate if needed.
+     i. COMMIT TRANSACTION.
+     j. AuctionSubject.notifyNewBid() → WebSocketBroadcaster + NotificationService.
+ 11. WebSocketBroadcaster emits 'new_bid' to the auction Socket.IO room.
+ 12. Frontend useSocket hook receives the event → updates UI in real-time.
+
+FLOW 6: PROXY BIDDING
+──────────────────────
+  1. Buyer sets a maximum willing-to-pay for an auction.
+  2. Frontend calls bidService.placeProxyBid({ auctionId, maxWillingToPay }).
+  3. Axios POST → /api/bids/proxy.
+  4. bidRoutes.js → BidController.setProxyLimit().
+  5. BidController calls AuctionFacade.setProxyBidLimit().
+  6. Facade:
+     a. BEGIN TRANSACTION.
+     b. Verify user.walletBalance >= maxWillingToPay.
+     c. findOrCreate ProxyBidLimit (upsert if already exists).
+     d. COMMIT TRANSACTION.
+  7. When another user places a manual bid:
+     a. PlaceBidCommand calls ProxyBiddingEngine.processProxyBids().
+     b. Engine finds all competing proxy limits (excluding manual bidder).
+     c. Scenario A: Proxy limit > manual bid → auto-bid at (manual + $1).
+     d. Scenario B: Manual bid > proxy limit → proxy user maxes out.
+     e. Auto-bid record created + Observable notification sent.
+
+FLOW 7: SETTLE AUCTION
+───────────────────────
+  1. Admin or system triggers settlement.
+  2. POST /api/auctions/:id/close.
+  3. auctionRoutes.js → AuctionController.close().
+  4. AuctionController calls AuctionFacade.settleAuction(auctionId).
+  5. Facade creates SettleAuctionCommand → CommandInvoker.executeCommand().
+  6. Command delegates to AuctionSettlementService.settleAuction():
+     a. BEGIN TRANSACTION with row-level lock.
+     b. Fetch auction, ticket, all bids.
+     c. AuctionContext.setStrategy() → determineWinnerAndPrice(bids).
+     d. If winner:
+        - Deduct finalPrice from buyer.walletBalance.
+        - Add finalPrice to seller.walletBalance.
+        - Transfer ticket ownership (ticket.sellerId = buyer.id).
+        - ticket.status = 'Sold', auction.status = 'Closed'.
+     e. If no winner:
+        - auction.status = 'Closed', ticket.status = 'Available'.
+     f. COMMIT TRANSACTION.
+     g. Dispatch async jobs:
+        - emailQueue.add('SendWinnerEmail', { ... })
+        - pdfQueue.add('GenerateReceipt', { ... })
+     h. AuctionSubject.notifyAuctionClosed() → all observers.
+
+================================================================================
+10. BUSINESS LOGIC — EVERY RULE
+================================================================================
+
+RULE 1: WALLET BALANCE
+  - Every new user receives $1000 wallet balance on registration.
+  - A bid can only be placed if user.walletBalance >= bidAmount.
+  - On settlement: buyer.walletBalance -= finalPrice,
+                   seller.walletBalance += finalPrice.
+
+RULE 2: TICKET LIFECYCLE
+  - Created as 'Available'.
+  - Moves to 'In_Auction' when an auction starts.
+  - Moves to 'Sold' when settlement completes with a winner.
+  - Returns to 'Available' if auction closes with no bids.
+  - A ticket in 'In_Auction' or 'Sold' status cannot create a new auction.
+
+RULE 3: AUCTION LIFECYCLE
+  - Created as 'Active' with a startingPrice and endTime.
+  - currentHighestBid starts at startingPrice.
+  - Bids can only be placed while status == 'Active' && now < endTime.
+  - Settlement sets status to 'Closed'.
+  - A closed auction cannot be settled again.
+
+RULE 4: ENGLISH AUCTION RULES
+  - A new bid must be strictly greater than currentHighestBid.
+  - The bidder must have sufficient walletBalance.
+  - The highest bidder wins at THEIR bid price.
+
+RULE 5: VICKREY AUCTION RULES
+  - Any positive bid is accepted (sealed bid — no comparison to others).
+  - The bidder must have sufficient walletBalance.
+  - The highest bidder wins but pays the SECOND highest bid price.
+  - If only one bid exists, the winner pays their own bid.
+
+RULE 6: PROXY BIDDING RULES
+  - A user sets a maxWillingToPay per auction (one limit per user per auction).
+  - User must have walletBalance >= maxWillingToPay to set the limit.
+  - Only applies to English auctions (not Vickrey).
+  - When a manual bid arrives, the proxy engine checks all competing proxies.
+  - Scenario A (Proxy beats manual): auto-bid = manualBid + $1
+    (capped at proxy limit), proxy user becomes new leader.
+  - Scenario B (Manual beats proxy): proxy maxes out, manual bidder wins.
+  - Proxy auto-bids are recorded as real bid records in the database.
+
+RULE 7: SETTLEMENT RULES
+  - Settlement uses database transactions with row-level locks (FOR UPDATE).
+  - Fund transfer is atomic: buyer debit + seller credit + ticket transfer.
+  - If buyer has insufficient funds at settlement time, transaction aborts.
+  - Async jobs (email, PDF) are dispatched AFTER transaction commits.
+  - Observers are notified AFTER transaction commits.
+
+RULE 8: CONCURRENCY RULES
+  - Auction row is locked (SELECT ... FOR UPDATE) during bid placement.
+  - This prevents two simultaneous bids from creating race conditions.
+  - ProxyBidLimit rows are also locked during proxy processing.
+  - All bid operations run inside a Sequelize transaction.
+
+================================================================================
+11. AUTHENTICATION & ROLE SYSTEM
+================================================================================
+
+11.1 AUTHENTICATION FLOW
+──────────────────────────
+  Technology: JSON Web Tokens (JWT) + bcryptjs
+
+  REGISTRATION:
+    1. User submits { name, email, password }.
+    2. Server checks if email already exists.
+    3. Password is hashed via bcrypt (10 salt rounds) in Sequelize beforeSave hook.
+    4. User record created with hashed password.
+    5. JWT generated: jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '30d' }).
+    6. Token + user data returned to frontend.
+    7. Frontend stores in localStorage.
+
+  LOGIN:
+    1. User submits { email, password }.
+    2. Server finds user by email.
+    3. bcrypt.compare(entered, passwordHash) verifies password.
+    4. If valid, JWT token generated and returned.
+    5. Frontend stores in localStorage.
+
+  TOKEN USAGE:
+    1. Frontend axios interceptor reads user from localStorage.
+    2. Attaches header: Authorization: Bearer <token>.
+    3. Backend authMiddleware.protect() extracts token from header.
+    4. jwt.verify(token, JWT_SECRET) decodes the token.
+    5. User fetched from database by decoded.id.
+    6. req.user is set (excluding passwordHash).
+    7. next() called to proceed to route handler.
+
+11.2 ROLE-BASED ACCESS CONTROL (RBAC)
+───────────────────────────────────────
+  Roles: USER (default) | ADMIN
+
+  Middleware Chain for Admin Routes:
+    protect → adminGuard → controller
+    1. protect: Verifies JWT, attaches req.user.
+    2. adminGuard: Checks req.user.role === 'ADMIN'.
+    3. If not ADMIN → 403 "Forbidden. Admin access required."
+
+  Frontend RBAC:
+    - Navbar.jsx checks user?.role === 'ADMIN'.
+    - Admin Panel link only shown for ADMIN users.
+    - AdminDashboard.jsx calls adminService.getAnalytics().
+
+================================================================================
+12. USE CASES
+================================================================================
+
+UC-01: USER REGISTRATION
+  Actor: Visitor
+  Precondition: User has not registered before.
+  Main Flow:
+    1. Visitor navigates to /register.
+    2. Fills in name, email, password.
+    3. Clicks "Register".
+    4. System creates account with $1000 balance.
+    5. System returns JWT token.
+    6. Visitor is now authenticated.
+  Postcondition: User account exists with wallet balance.
+
+UC-02: USER LOGIN
+  Actor: Registered User
+  Precondition: User has a valid account.
+  Main Flow:
+    1. User navigates to /login.
+    2. Enters email and password.
+    3. System verifies credentials.
+    4. System returns JWT token.
+  Alternate Flow:
+    3a. Invalid credentials → 401 error shown.
+  Postcondition: User is authenticated.
+
+UC-03: CREATE TICKET
+  Actor: Seller (authenticated)
+  Precondition: User is logged in.
+  Main Flow:
+    1. Seller navigates to /sell.
+    2. Enters event ID and seat information.
+    3. Clicks "Create Ticket".
+    4. System creates ticket with status 'Available'.
+  Postcondition: Ticket exists and can be auctioned.
+
+UC-04: START AUCTION
+  Actor: Seller (authenticated)
+  Precondition: Seller owns an 'Available' ticket.
+  Main Flow:
+    1. Seller selects ticket, strategy type, price, end time.
+    2. System validates via AuctionBuilder.
+    3. System creates auction via AuctionFactory.
+    4. Ticket status changes to 'In_Auction'.
+  Alternate Flow:
+    2a. Invalid fields → error shown.
+    2b. Ticket not available → error shown.
+  Postcondition: Active auction exists.
+
+UC-05: PLACE BID
+  Actor: Buyer (authenticated)
+  Precondition: Active auction exists. Buyer has sufficient balance.
+  Main Flow:
+    1. Buyer views auction on /auctions.
+    2. Enters bid amount.
+    3. System validates via Chain of Responsibility.
+    4. System executes PlaceBidCommand.
+    5. WebSocket notifies all connected users.
+  Alternate Flow:
+    3a. Bid too low (English) → error.
+    3b. Insufficient balance → error.
+    3c. Auction expired → error.
+  Postcondition: Bid recorded. Auction updated.
+
+UC-06: SET PROXY BID
+  Actor: Buyer (authenticated)
+  Precondition: Active English auction exists.
+  Main Flow:
+    1. Buyer sets max willing to pay.
+    2. System validates wallet balance.
+    3. ProxyBidLimit stored (upsert).
+    4. When outbid, proxy engine auto-bids.
+  Postcondition: Proxy limit active.
+
+UC-07: SETTLE AUCTION
+  Actor: Admin / System
+  Precondition: Auction exists (Active or expired).
+  Main Flow:
+    1. POST /api/auctions/:id/close triggered.
+    2. System determines winner via Strategy.
+    3. Funds transferred atomically.
+    4. Ticket ownership transferred.
+    5. Async jobs dispatched (email, PDF).
+    6. Observers notified.
+  Alternate Flow:
+    2a. No bids → auction closed without winner.
+  Postcondition: Auction closed. Funds and ticket settled.
+
+UC-08: VIEW ANALYTICS (ADMIN)
+  Actor: Admin
+  Precondition: User has ADMIN role.
+  Main Flow:
+    1. Admin navigates to /admin.
+    2. System fetches totalVolume, totalUsers, auction counts.
+    3. Dashboard displays metrics.
+  Postcondition: Analytics displayed.
+
+================================================================================
+13. SEQUENCE DIAGRAMS (TEXT-BASED UML)
+================================================================================
+
+SD-01: USER REGISTRATION SEQUENCE
+───────────────────────────────────
+
+  Frontend          authRoutes      AuthController    UserRepository    User Model
+     │                  │                │                │               │
+     │  POST /register  │                │                │               │
+     │─────────────────►│                │                │               │
+     │                  │   register()   │                │               │
+     │                  │───────────────►│                │               │
+     │                  │                │  findByEmail() │               │
+     │                  │                │───────────────►│               │
+     │                  │                │   null         │               │
+     │                  │                │◄───────────────│               │
+     │                  │                │  create()      │               │
+     │                  │                │───────────────►│  beforeSave() │
+     │                  │                │                │──────────────►│
+     │                  │                │                │  bcrypt hash  │
+     │                  │                │                │◄──────────────│
+     │                  │                │   user object  │               │
+     │                  │                │◄───────────────│               │
+     │                  │                │ generateToken()│               │
+     │                  │                │ (JWT)          │               │
+     │                  │   { user, token }               │               │
+     │                  │◄───────────────│                │               │
+     │  201 Created     │                │                │               │
+     │◄─────────────────│                │                │               │
+     │ store localStorage                │                │               │
+
+
+SD-02: PLACE BID SEQUENCE (FULL CHAIN)
+───────────────────────────────────────
+
+  Frontend     bidRoutes    BidController   AuctionFacade   ValidationDec   BidChain
+     │             │             │              │                │            │
+     │ POST /bids  │             │              │                │            │
+     │────────────►│             │              │                │            │
+     │             │ placeBid()  │              │                │            │
+     │             │────────────►│              │                │            │
+     │             │             │ placeBid()   │                │            │
+     │             │             │─────────────►│                │            │
+     │             │             │              │  validate()    │            │
+     │             │             │              │───────────────►│            │
+     │             │             │              │    ✓ OK        │            │
+     │             │             │              │◄───────────────│            │
+     │             │             │              │                │ handle()   │
+     │             │             │              │───────────────────────────►│
+     │             │             │              │                │  4 checks  │
+     │             │             │              │◄───────────────────────────│
+
+  (continued)
+  AuctionFacade    CommandInvoker   PlaceBidCommand   AuctionContext   ProxyEngine
+     │                  │                │                │               │
+     │  executeCommand()│                │                │               │
+     │─────────────────►│                │                │               │
+     │                  │   execute()    │                │               │
+     │                  │───────────────►│                │               │
+     │                  │                │  BEGIN TX       │               │
+     │                  │                │  Lock auction   │               │
+     │                  │                │  setStrategy()  │               │
+     │                  │                │───────────────►│               │
+     │                  │                │  validateBid() │               │
+     │                  │                │───────────────►│               │
+     │                  │                │    ✓ valid     │               │
+     │                  │                │◄───────────────│               │
+     │                  │                │  Bid.create()  │               │
+     │                  │                │  processProxy()│               │
+     │                  │                │──────────────────────────────►│
+     │                  │                │                │  auto-bids   │
+     │                  │                │◄──────────────────────────────│
+     │                  │                │  COMMIT TX     │               │
+     │                  │                │  notifyNewBid()│               │
+     │                  │   result       │                │               │
+     │                  │◄───────────────│                │               │
+     │   result         │                │                │               │
+     │◄─────────────────│                │                │               │
+
+  (continued — Observer notification)
+  AuctionSubject    WebSocketBroadcaster    NotificationService    Frontend
+       │                    │                       │                 │
+       │   notifyNewBid()   │                       │                 │
+       │───────────────────►│                       │                 │
+       │                    │  io.emit('new_bid')   │                 │
+       │                    │────────────────────────────────────────►│
+       │   notifyNewBid()   │                       │                 │
+       │───────────────────────────────────────────►│                 │
+       │                    │                       │ console.log()   │
+       │                    │                       │                 │
+
+
+SD-03: SETTLE AUCTION SEQUENCE
+───────────────────────────────
+
+  Admin/Sys     auctionRoutes   AuctionCtrl    Facade     CmdInvoker    SettleCmd
+     │               │             │            │             │            │
+     │ POST /close   │             │            │             │            │
+     │──────────────►│             │            │             │            │
+     │               │  close()    │            │             │            │
+     │               │────────────►│            │             │            │
+     │               │             │ settle()   │             │            │
+     │               │             │───────────►│             │            │
+     │               │             │            │ execute()   │            │
+     │               │             │            │────────────►│            │
+     │               │             │            │             │ execute()  │
+     │               │             │            │             │───────────►│
+     │               │             │            │             │            │
+
+  (continued)
+  SettleCmd    SettlementService   AuctionContext    Strategy     emailQueue   pdfQueue
+     │               │                │               │              │           │
+     │  settleAuction()               │               │              │           │
+     │──────────────►│                │               │              │           │
+     │               │  BEGIN TX      │               │              │           │
+     │               │  Lock auction  │               │              │           │
+     │               │  Fetch bids    │               │              │           │
+     │               │  setStrategy() │               │              │           │
+     │               │───────────────►│               │              │           │
+     │               │  determineWin()│               │              │           │
+     │               │───────────────►│───────────────►              │           │
+     │               │  { winner, price }             │              │           │
+     │               │◄──────────────────────────────│              │           │
+     │               │  Deduct buyer                  │              │           │
+     │               │  Credit seller                 │              │           │
+     │               │  Transfer ticket               │              │           │
+     │               │  COMMIT TX                     │              │           │
+     │               │  add('SendWinnerEmail')         │              │           │
+     │               │────────────────────────────────────────────►│           │
+     │               │  add('GenerateReceipt')         │              │           │
+     │               │──────────────────────────────────────────────────────►│
+     │               │  notifyAuctionClosed()          │              │           │
+     │  result       │                │               │              │           │
+     │◄──────────────│                │               │              │           │
+
+
+SD-04: PROXY BIDDING SEQUENCE
+──────────────────────────────
+
+  ManualBidder    PlaceBidCommand    ProxyEngine    ProxyBidLimit    User(Proxy)
+       │                │                │               │               │
+       │   execute()    │                │               │               │
+       │───────────────►│                │               │               │
+       │                │  (bid placed)  │               │               │
+       │                │  processProxy()│               │               │
+       │                │───────────────►│               │               │
+       │                │                │  findAll()    │               │
+       │                │                │──────────────►│               │
+       │                │                │  proxies[]    │               │
+       │                │                │◄──────────────│               │
+       │                │                │               │               │
+       │                │                │  [topProxy > manualBid?]      │
+       │                │                │               │               │
+       │                │                │  findByPk()   │               │
+       │                │                │──────────────────────────────►│
+       │                │                │  check balance│               │
+       │                │                │◄──────────────────────────────│
+       │                │                │               │               │
+       │                │                │  auction.save()│              │
+       │                │                │  Bid.create() │               │
+       │                │                │  notifyNewBid()│              │
+       │                │   ◄────────────│               │               │
+       │   ◄────────────│                │               │               │
+
+================================================================================
+14. TESTING SYSTEM
+================================================================================
+
+CURRENT STATUS:
+  The project does not currently have automated unit or integration tests.
+  The package.json scripts section shows:
+    "test": "echo \"Error: no test specified\" && exit 1"
+
+RECOMMENDED TESTING STRATEGY:
+
+  14.1 UNIT TESTS (Jest / Mocha)
+  ──────────────────────────────
+    Test each pattern class in isolation:
+    - EnglishAuctionStrategy: bid validation + winner determination.
+    - VickreyAuctionStrategy: sealed bid + second-price winner.
+    - StrategyFactory: correct strategy instantiation, unknown type error.
+    - AuctionBuilder: fluent API, validation, frozen output.
+    - BidValidationChain: each handler pass/fail, chain ordering.
+    - CommandInvoker: execute, history logging.
+    - LoggingDecorator: Proxy wrapping, log output.
+
+  14.2 INTEGRATION TESTS (Supertest)
+  ───────────────────────────────────
+    Test API endpoints end-to-end:
+    - POST /api/auth/register → creates user, returns token.
+    - POST /api/auth/login → validates credentials.
+    - POST /api/tickets → requires auth, creates ticket.
+    - POST /api/auctions → creates auction, updates ticket.
+    - POST /api/bids → validates, places bid, triggers proxy.
+    - POST /api/auctions/:id/close → settles, transfers funds.
+    - GET /api/admin/analytics → requires ADMIN role.
+
+  14.3 MANUAL TESTING
+  ────────────────────
+    1. Start PostgreSQL and Redis.
+    2. Run `node server.js` in backend.
+    3. Run `npm run dev` in frontend.
+    4. Register two users (buyer + seller).
+    5. Create a ticket as seller.
+    6. Start an English auction.
+    7. Place bids as buyer.
+    8. Observe real-time WebSocket updates.
+    9. Close auction and verify fund transfer.
+
+================================================================================
+15. BUILD SYSTEM
+================================================================================
+
+15.1 BACKEND BUILD
+───────────────────
+  Runtime: Node.js (no compilation needed for CommonJS).
+  
+  SETUP:
+    cd backend
+    npm install          # Installs all dependencies from package.json
+  
+  ENVIRONMENT:
+    Create .env file with:
+      PORT=5000
+      DB_NAME=fairplay_auction
+      DB_USER=postgres
+      DB_PASSWORD=<your_password>
+      DB_HOST=localhost
+      JWT_SECRET=<your_secret>
+  
+  RUN:
+    node server.js       # Starts Express + Socket.IO + DB sync
+  
+  DATABASE:
+    PostgreSQL must be running.
+    Sequelize.sync({ alter: true }) auto-creates/updates tables.
+
+15.2 FRONTEND BUILD
+────────────────────
+  Build Tool: Vite v8.0.0
+  
+  SETUP:
+    cd frontend
+    npm install
+  
+  DEVELOPMENT:
+    npm run dev          # Starts Vite dev server with HMR
+  
+  PRODUCTION:
+    npm run build        # Creates optimized production bundle in dist/
+    npm run preview      # Preview production build locally
+  
+  LINTING:
+    npm run lint         # Runs ESLint
+
+15.3 EXTERNAL DEPENDENCIES
+───────────────────────────
+  - PostgreSQL: Database server (must be running on localhost:5432).
+  - Redis: For BullMQ job queues (optional — graceful fallback if unavailable).
+    The JobQueueService has a retry strategy that stops after 3 attempts
+    and falls back to console.warn logging.
+
+================================================================================
+16. CODE WALKTHROUGH — KEY METHODS
+================================================================================
+
+16.1 AuctionSettlementService.settleAuction(auctionId)
+───────────────────────────────────────────────────────
+  FILE: services/AuctionSettlementService.js
+  PURPOSE: The most critical method — handles the financial settlement.
+  
+  STEP-BY-STEP:
+    1. BEGIN TRANSACTION with Sequelize.
+    2. Lock the Auction row (SELECT ... FOR UPDATE) to prevent concurrent settlement.
+    3. Verify auction exists and is not already Closed.
+    4. Fetch the associated Ticket.
+    5. Fetch ALL Bids for this auction, sorted descending by amount.
+    6. Call AuctionContext.setStrategy(strategyType) → StrategyFactory creates
+       the correct strategy instance.
+    7. Call strategy.determineWinnerAndPrice(bids):
+       - English: Winner = highest bidder, Price = their bid.
+       - Vickrey: Winner = highest bidder, Price = SECOND highest bid.
+    8. If a winner exists:
+       a. Load Buyer and verify walletBalance >= finalPrice.
+       b. buyer.walletBalance -= finalPrice (DEBIT).
+       c. seller.walletBalance += finalPrice (CREDIT).
+       d. ticket.sellerId = buyer.id (OWNERSHIP TRANSFER).
+       e. ticket.status = 'Sold'.
+       f. auction.status = 'Closed', auction.winningBidderId = buyer.id.
+       g. COMMIT TRANSACTION.
+       h. Dispatch email job to BullMQ queue.
+       i. Dispatch PDF receipt job to BullMQ queue.
+       j. Notify all observers (WebSocket + Notification).
+    9. If no winner (zero bids):
+       a. auction.status = 'Closed'.
+       b. ticket.status = 'Available' (returned to seller).
+       c. COMMIT TRANSACTION.
+       d. Notify observers with "No bids placed" message.
+   10. On ANY error: ROLLBACK TRANSACTION. No partial state changes.
+
+  WHY THIS MATTERS:
+    Financial operations MUST be atomic. If the buyer debit succeeds but the
+    seller credit fails, money disappears. The database transaction ensures
+    either ALL changes commit or NONE do.
+
+16.2 ProxyBiddingEngine.processProxyBids(auction, amount, bidderId, tx)
+──────────────────────────────────────────────────────────────────────────
+  FILE: services/ProxyBiddingEngine.js
+  PURPOSE: Automatically escalates bids on behalf of users who set proxy limits.
+
+  STEP-BY-STEP:
+    1. Find all ProxyBidLimit records for this auction, EXCLUDING the manual bidder.
+    2. Sort by maxWillingToPay DESC. Lock rows (FOR UPDATE).
+    3. Take the top proxy competitor.
+    4. SCENARIO A — Proxy wins:
+       - topProxy.maxWillingToPay > manualBidAmount.
+       - autoBidAmount = manualBid + $1 (minimum increment).
+       - Capped at proxy's max limit.
+       - Verify proxy user has wallet balance for auto-bid.
+       - Update auction to reflect new highest bid.
+       - Create a physical Bid record (isProxyAutoBid = true).
+       - Notify observers.
+    5. SCENARIO B — Manual bid wins:
+       - manualBidAmount > topProxy.maxWillingToPay.
+       - Proxy user places a final bid AT their max limit (to show they tried).
+       - Manual bidder still wins (their bid is higher).
+    6. All operations happen INSIDE the same transaction as the manual bid.
+
+  WHY THIS MATTERS:
+    Proxy processing must be transactional with the manual bid. If processed
+    separately, a race condition could allow the proxy to react to a bid
+    that ultimately rolls back.
+
+16.3 AuctionFacade.placeBid(auctionId, amount, userId)
+───────────────────────────────────────────────────────
+  FILE: facades/AuctionFacade.js
+  PURPOSE: Orchestrates the full bid pipeline using multiple patterns.
+
+  STEP-BY-STEP:
+    1. ValidationDecorator.validateBidPreconditions(auctionId, amount, userId)
+       → Decorator Pattern: 6 pre-checks (amount > 0, auction exists, etc.)
+    2. buildBidValidationChain().handle({ auction, user, amount })
+       → Chain of Responsibility: 4 linked handlers.
+    3. new PlaceBidCommand(auctionId, amount, userId)
+       → Command Pattern: encapsulates the bid operation.
+    4. CommandInvoker.executeCommand(command)
+       → Command Pattern (Invoker): dispatches + logs audit history.
+    5. Inside PlaceBidCommand.execute():
+       → Strategy Pattern: AuctionContext validates bid.
+       → Observer Pattern: notifyNewBid() after commit.
+       → Proxy Engine: auto-escalation if applicable.
+
+  THIS METHOD TOUCHES 6 DESIGN PATTERNS in a single call.
+
+16.4 LoggingDecorator.wrap(service, serviceName)
+─────────────────────────────────────────────────
+  FILE: decorators/LoggingDecorator.js
+  PURPOSE: Transparently wraps any object with automatic method logging.
+
+  HOW IT WORKS:
+    return new Proxy(service, {
+      get(target, property, receiver) {
+        const original = target[property];
+        if (typeof original !== 'function') return original;
+        return async function (...args) {
+          console.log(`▶ ${property}() called`);
+          try {
+            const result = await original.apply(target, args);
+            console.log(`◀ ${property}() completed`);
+            return result;
+          } catch (error) {
+            console.error(`✖ ${property}() threw: ${error.message}`);
+            throw error;
+          }
+        };
+      }
+    });
+
+  KEY INSIGHT: ES6 Proxy intercepts property access at the JavaScript engine
+  level. When you access loggedService.someMethod, the Proxy's get trap fires.
+  It checks if the property is a function, and if so, returns a wrapper that
+  logs before/after the original call. The original service is NEVER modified.
+
+================================================================================
+17. FUTURE DEVELOPMENT SCOPE
+================================================================================
+
+17.1 ADDITIONAL AUCTION STRATEGIES
+  - Dutch Auction: Price starts high and decreases until someone bids.
+  - Penny Auction: Each bid increases price by a small amount + extends timer.
+  - Implementation: Create new Strategy class + register in StrategyFactory.
+
+17.2 PAYMENT GATEWAY INTEGRATION
+  - Replace wallet system with real payment processing (Stripe, Razorpay).
+  - Implement escrow: hold buyer funds until settlement confirmation.
+
+17.3 EMAIL & SMS NOTIFICATIONS
+  - Replace console.log in NotificationService with actual email dispatch
+    (SendGrid, Nodemailer) and SMS (Twilio).
+
+17.4 SCHEDULED AUCTION CLOSURE
+  - Use node-cron or BullMQ scheduled jobs to auto-close auctions at endTime.
+  - Currently requires manual POST to /close.
+
+17.5 ADVANCED ANALYTICS
+  - Time-series charts for bid activity.
+  - Per-user trading history.
+  - Most popular events/categories.
+  - Revenue breakdown by strategy type.
+
+17.6 FRONTEND ENHANCEMENTS
+  - Real-time countdown timer per auction.
+  - Bid history graph with live updates.
+  - User profile page with transaction history.
+  - Dark mode toggle.
+  - Mobile-responsive design improvements.
+
+17.7 SECURITY HARDENING
+  - Rate limiting on bid endpoints (express-rate-limit).
+  - Input validation middleware (Joi / Zod schemas).
+  - CORS configuration for production domains.
+  - Helmet.js for security headers.
+  - Account lockout after failed login attempts.
+
+17.8 TESTING
+  - Jest unit tests for all pattern classes.
+  - Supertest integration tests for all endpoints.
+  - WebSocket event testing.
+  - Load testing with Artillery for concurrent bids.
+
+17.9 DEPLOYMENT
+  - Dockerize backend + frontend + PostgreSQL + Redis.
+  - CI/CD pipeline (GitHub Actions).
+  - Environment-specific configs (dev, staging, production).
+  - Database migrations (Sequelize CLI) instead of sync({ alter: true }).
+
+17.10 ADDITIONAL DESIGN PATTERNS
+  - Adapter Pattern: Wrap multiple notification providers (email, SMS, push)
+    behind a unified NotificationAdapter interface.
+  - State Pattern: Model Auction lifecycle (Pending → Active → Closed) as
+    state objects with allowed transitions.
+  - Mediator Pattern: Decouple bid placement from proxy processing via
+    a central AuctionMediator.
+  - Template Method: Define a skeleton settlement algorithm in
+    BaseSettlementService, letting subclasses override specific steps.
+
+================================================================================
+                              END OF DOCUMENT
+================================================================================
+Total Design Patterns: 10 (Strategy, Observer, Singleton, Factory, Builder,
+                           Repository, Command, Decorator, CoR, Facade)
+Total New Files: 22
+Total Classes/Modules: 40+
+Total Lines of Documentation: 1300+
+================================================================================

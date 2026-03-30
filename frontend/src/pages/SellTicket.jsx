@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Ticket as TicketIcon, MapPin, Info, ArrowRight } from 'lucide-react';
-import { auctionService, authService } from '../services/api';
+import { auctionService, ticketService, authService } from '../services/api';
 
 const SellTicket = () => {
   const navigate = useNavigate();
@@ -12,7 +12,8 @@ const SellTicket = () => {
     row: '',
     seat: '',
     strategyType: 'English',
-    startingPrice: ''
+    startingPrice: '',
+    durationHours: '1'
   });
 
   const handleChange = (e) => {
@@ -24,8 +25,6 @@ const SellTicket = () => {
     e.preventDefault();
     setLoading(true);
 
-    // In a full integration, we would create the ticket FIRST, then the auction.
-    // For UI demonstration, we'll simulate the process or try the API
     try {
         const user = authService.getCurrentUser();
         if (!user) {
@@ -34,15 +33,30 @@ const SellTicket = () => {
             return;
         }
 
-        // Mocking the API call for now if DB isn't connected
-        console.log("Submitting:", formData);
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
+        // Step 1: Create the ticket
+        const ticket = await ticketService.createTicket({
+            eventId: formData.eventId,
+            seatInfo: {
+                section: formData.section,
+                row: formData.row,
+                seat: formData.seat
+            }
+        });
+
+        // Step 2: Create the auction using the ticket ID
+        const endTime = new Date(Date.now() + Number(formData.durationHours) * 3600000).toISOString();
+        await auctionService.createAuction({
+            ticketId: ticket.id,
+            strategyType: formData.strategyType,
+            startingPrice: Number(formData.startingPrice),
+            endTime
+        });
+
         // On success
         navigate('/auctions');
     } catch (error) {
         console.error("Error creating auction", error);
-        alert("Failed to create auction.");
+        alert(error.response?.data?.message || "Failed to create auction.");
     } finally {
         setLoading(false);
     }
@@ -182,6 +196,27 @@ const SellTicket = () => {
                   className="block w-full rounded-xl border-0 py-3 pl-8 pr-4 text-slate-900 dark:text-white dark:bg-slate-800 ring-1 ring-inset ring-slate-300 dark:ring-slate-600 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-primary-600 sm:text-sm sm:leading-6 transition-all"
                   placeholder="0.00"
                 />
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <label className="block text-sm font-medium leading-6 text-slate-900 dark:text-slate-300">
+                Auction Duration (hours)
+              </label>
+              <div className="mt-2 max-w-xs">
+                <select
+                  name="durationHours"
+                  value={formData.durationHours}
+                  onChange={handleChange}
+                  className="block w-full rounded-xl border-0 py-3 px-4 text-slate-900 dark:text-white dark:bg-slate-800 ring-1 ring-inset ring-slate-300 dark:ring-slate-600 focus:ring-2 focus:ring-inset focus:ring-primary-600 sm:text-sm sm:leading-6 transition-all"
+                >
+                  <option value="1">1 hour</option>
+                  <option value="2">2 hours</option>
+                  <option value="6">6 hours</option>
+                  <option value="12">12 hours</option>
+                  <option value="24">24 hours</option>
+                  <option value="48">48 hours</option>
+                </select>
               </div>
             </div>
           </div>

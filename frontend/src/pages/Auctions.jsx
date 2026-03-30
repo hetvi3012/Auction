@@ -9,30 +9,8 @@ const Auctions = () => {
   useEffect(() => {
     const fetchAuctions = async () => {
       try {
-        // Since DB might not be running locally, we mock for UI demonstration 
-        // if the API call fails or until backend is fully hooked up.
-        try {
-           const data = await auctionService.getActiveAuctions();
-           setAuctions(data);
-        } catch (error) {
-           console.log("Using mock data for UI demo. Backend API unavailable.");
-           setAuctions([
-             {
-               _id: '1',
-               ticketId: { eventId: 'Taylor Swift - Eras Tour', seatInfo: { section: '101', row: 'A', seat: '12' } },
-               strategyType: 'English',
-               currentHighestBid: 450,
-               endTime: new Date(Date.now() + 3600000).toISOString() // 1 hour from now
-             },
-             {
-               _id: '2',
-               ticketId: { eventId: 'TechConf 2026 VIP Pass', seatInfo: { section: 'VIP' } },
-               strategyType: 'Vickrey',
-               currentHighestBid: 800,
-               endTime: new Date(Date.now() + 86400000).toISOString() // 24 hours from now
-             }
-           ]);
-        }
+        const data = await auctionService.getActiveAuctions();
+        setAuctions(data);
       } catch (error) {
         console.error('Error fetching auctions:', error);
       } finally {
@@ -65,7 +43,7 @@ const Auctions = () => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {auctions.map((auction) => (
-          <AuctionCard key={auction._id} auction={auction} />
+          <AuctionCard key={auction.id} auction={auction} />
         ))}
       </div>
       
@@ -80,7 +58,7 @@ const Auctions = () => {
 
 const AuctionCard = ({ auction }) => {
   // Integrate real-time socket updates per card
-  const { latestBid } = useSocket(auction._id);
+  const { latestBid } = useSocket(auction.id);
   const [currentPrice, setCurrentPrice] = useState(auction.currentHighestBid);
 
   useEffect(() => {
@@ -103,12 +81,12 @@ const AuctionCard = ({ auction }) => {
       </div>
       
       <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2 line-clamp-2">
-        {auction.ticketId?.eventId}
+        {auction.ticket?.eventId}
       </h3>
       
       <div className="text-sm text-slate-500 dark:text-slate-400 mb-6 flex-grow">
-        <p>Section: {auction.ticketId?.seatInfo?.section || 'N/A'}</p>
-        <p>Row: {auction.ticketId?.seatInfo?.row || 'N/A'} | Seat: {auction.ticketId?.seatInfo?.seat || 'N/A'}</p>
+        <p>Section: {auction.ticket?.seatInfo?.section || 'N/A'}</p>
+        <p>Row: {auction.ticket?.seatInfo?.row || 'N/A'} | Seat: {auction.ticket?.seatInfo?.seat || 'N/A'}</p>
       </div>
 
       <div className="border-t border-slate-100 dark:border-slate-700/50 pt-4 mt-auto">
