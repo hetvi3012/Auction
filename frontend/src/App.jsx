@@ -5,6 +5,7 @@ import Auctions from './pages/Auctions';
 import SellTicket from './pages/SellTicket';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Profile from './pages/Profile';
 import AdminDashboard from './pages/AdminDashboard'; // Phase 2 Extension
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
              <Route path="/sell" element={<SellTicket />} />
              <Route path="/login" element={<Login />} />
              <Route path="/register" element={<Register />} />
+             <Route path="/profile" element={<Profile />} />
              <Route path="/admin" element={<AdminDashboard />} />
           </Routes>
         </main>

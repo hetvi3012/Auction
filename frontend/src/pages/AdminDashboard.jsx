@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react';
 import { adminService, authService } from '../services/api';
-import { Activity, Users, DollarSign, Database, AlertCircle } from 'lucide-react';
+import { Activity, Users, DollarSign, Database, AlertCircle, XCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const AdminDashboard = () => {
   const [metrics, setMetrics] = useState(null);
+  const [auctions, setAuctions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [closingId, setClosingId] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchAnalytics = async () => {
+    const fetchData = async () => {
       const user = authService.getCurrentUser();
       if (!user) {
          navigate('/login');
@@ -18,29 +20,44 @@ const AdminDashboard = () => {
       }
 
       try {
-        const data = await adminService.getAnalytics();
-        setMetrics(data.metrics);
+        const [analyticsData, auctionsData] = await Promise.all([
+          adminService.getAnalytics(),
+          adminService.getAuctions()
+        ]);
+        setMetrics(analyticsData.metrics);
+        setAuctions(auctionsData);
         setError(null);
       } catch (err) {
-        console.error("Failed to fetch analytics", err);
+        console.error("Failed to fetch admin data", err);
         setError(err.response?.data?.message || "Failed to load admin dashboard. Ensure you have ADMIN role.");
         
-        // Mock data for demonstration purposes if unauthorized/down
         setMetrics({
-            totalVolume: 54300,
-            totalUsers: 142,
-            auctions: {
-               active: 12,
-               completed: 45
-            }
+            totalVolume: 0,
+            totalUsers: 0,
+            auctions: { active: 0, completed: 0 }
         });
       } finally {
         setLoading(false);
       }
     };
 
-    fetchAnalytics();
+    fetchData();
   }, [navigate]);
+
+  const handleCloseAuction = async (auctionId) => {
+    setClosingId(auctionId);
+    try {
+      await adminService.closeAuction(auctionId);
+      const updatedAuctions = await adminService.getAuctions();
+      setAuctions(updatedAuctions);
+      const analyticsData = await adminService.getAnalytics();
+      setMetrics(analyticsData.metrics);
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to close auction.');
+    } finally {
+      setClosingId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -68,38 +85,32 @@ const AdminDashboard = () => {
              <div>
                 <h3 className="text-sm font-semibold text-red-800 dark:text-red-300">Access Restricted</h3>
                 <p className="text-sm text-red-700 dark:text-red-400 mt-1">{error}</p>
-                <p className="text-xs text-red-600 dark:text-red-500 mt-2 font-medium bg-red-100 dark:bg-red-900/40 px-2 py-1 rounded inline-block">Showing Fallback Mock Data</p>
              </div>
          </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        
-        {/* Metric 1 */}
+      {/* Metrics Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
         <div className="glass-panel p-6 rounded-2xl">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Total Cleared Volume</p>
               <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">
-                ${metrics?.totalVolume.toLocaleString()}
+                ${metrics?.totalVolume?.toLocaleString() || 0}
               </h3>
             </div>
             <div className="p-3 bg-green-50 rounded-xl dark:bg-green-900/20">
               <DollarSign className="w-6 h-6 text-green-600 dark:text-green-400" />
             </div>
           </div>
-          <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-4 font-medium flex items-center gap-1">
-             +12.5% <span className="text-slate-500 dark:text-slate-400 font-normal">from last month</span>
-          </p>
         </div>
 
-        {/* Metric 2 */}
         <div className="glass-panel p-6 rounded-2xl">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Registered Users</p>
               <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">
-                {metrics?.totalUsers.toLocaleString()}
+                {metrics?.totalUsers?.toLocaleString() || 0}
               </h3>
             </div>
             <div className="p-3 bg-primary-50 rounded-xl dark:bg-primary-900/20">
@@ -108,44 +119,104 @@ const AdminDashboard = () => {
           </div>
         </div>
 
-        {/* Metric 3 */}
         <div className="glass-panel p-6 rounded-2xl">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Active Auctions</p>
               <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">
-                {metrics?.auctions.active.toLocaleString()}
+                {metrics?.auctions?.active?.toLocaleString() || 0}
               </h3>
             </div>
             <div className="p-3 bg-blue-50 rounded-xl dark:bg-blue-900/20">
               <Database className="w-6 h-6 text-blue-600 dark:text-blue-400" />
             </div>
           </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-4">
-             Currently processing live bids
-          </p>
         </div>
 
-        {/* Metric 4 */}
         <div className="glass-panel p-6 rounded-2xl">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Settled Auctions</p>
               <h3 className="text-3xl font-bold text-slate-900 dark:text-white mt-2">
-                {metrics?.auctions.completed.toLocaleString()}
+                {metrics?.auctions?.completed?.toLocaleString() || 0}
               </h3>
             </div>
             <div className="p-3 bg-purple-50 rounded-xl dark:bg-purple-900/20">
               <Activity className="w-6 h-6 text-purple-600 dark:text-purple-400" />
             </div>
           </div>
-          <div className="mt-4 w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5">
-            <div className="bg-purple-600 h-1.5 rounded-full" style={{ width: '75%' }}></div>
-          </div>
         </div>
-
       </div>
 
+      {/* Auction Management Section */}
+      <div className="glass-panel rounded-2xl p-6">
+        <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
+          <Database className="w-5 h-5 text-primary-600" />
+          Auction Management
+        </h2>
+
+        {auctions.length === 0 ? (
+          <p className="text-slate-500 dark:text-slate-400 text-center py-8">No auctions found.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Event</th>
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Strategy</th>
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Price</th>
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">End Time</th>
+                  <th className="py-3 px-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {auctions.map((auction) => (
+                  <tr key={auction.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                    <td className="py-4 px-4 text-sm text-slate-900 dark:text-white font-medium">
+                      {auction.ticket?.eventId || 'N/A'}
+                    </td>
+                    <td className="py-4 px-4">
+                      <span className={`px-2 py-1 rounded text-xs font-bold ${auction.strategyType === 'Vickrey' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'}`}>
+                        {auction.strategyType}
+                      </span>
+                    </td>
+                    <td className="py-4 px-4 text-sm text-slate-900 dark:text-white font-semibold">
+                      ${auction.currentHighestBid}
+                    </td>
+                    <td className="py-4 px-4">
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        auction.status === 'Active' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                        auction.status === 'Closed' ? 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300' :
+                        'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                      }`}>
+                        {auction.status}
+                      </span>
+                    </td>
+                    <td className="py-4 px-4 text-sm text-slate-500 dark:text-slate-400">
+                      {new Date(auction.endTime).toLocaleString()}
+                    </td>
+                    <td className="py-4 px-4">
+                      {auction.status === 'Active' ? (
+                        <button
+                          onClick={() => handleCloseAuction(auction.id)}
+                          disabled={closingId === auction.id}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          {closingId === auction.id ? 'Closing...' : 'Close Auction'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-slate-400 dark:text-slate-500">Settled</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

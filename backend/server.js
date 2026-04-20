@@ -4,6 +4,7 @@ const app = require('./app');
 const dotenv = require('dotenv');
 const { initObservers } = require('./services/ObserverRegistry');
 const { sequelize } = require('./models');
+const AuctionScheduler = require('./services/AuctionScheduler');
 
 dotenv.config();
 
@@ -43,6 +44,7 @@ sequelize.sync({ alter: true })
         console.log(`Connected to Postgres and models synced`);
         server.listen(PORT, () => {
             console.log(`Server running on port ${PORT}`);
+            AuctionScheduler.start();
         });
     })
     .catch((error) => {

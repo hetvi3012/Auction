@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Ticket, Menu, X, ShieldAlert } from 'lucide-react';
+import { Ticket, Menu, X, ShieldAlert, UserCircle } from 'lucide-react';
 import { authService } from '../services/api';
 
 const Navbar = () => {
@@ -42,13 +42,16 @@ const Navbar = () => {
                  </Link>
              )}
 
-             {user ? (
-               <div className="flex items-center gap-4">
-                 <span className="text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 px-3 py-1 rounded-full">
-                    Balance: ${user.walletBalance?.toLocaleString() || '0'}
-                 </span>
-                 <button onClick={() => { authService.logout(); window.location.href='/'; }} className="text-sm font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">Sign Out</button>
-               </div>
+              {user ? (
+                <div className="flex items-center gap-4">
+                  <Link to="/profile" className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white transition-colors">
+                     <UserCircle className="w-4 h-4" /> My Profile
+                  </Link>
+                  <Link to="/profile" className="text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700 px-3 py-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+                     Balance: ${user.walletBalance?.toLocaleString() || '0'}
+                  </Link>
+                  <button onClick={() => { authService.logout(); window.location.href='/'; }} className="text-sm font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white">Sign Out</button>
+                </div>
              ) : (
                <>
                  <Link to="/login" className="text-sm font-medium text-slate-500 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white transition-colors">

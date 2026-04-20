@@ -42,6 +42,20 @@ export const authService = {
   getCurrentUser: () => {
     return JSON.parse(localStorage.getItem('user'));
   },
+  topUp: async (amount) => {
+    const response = await api.post('/auth/topup', { amount });
+    // Update local storage with new balance
+    const user = JSON.parse(localStorage.getItem('user'));
+    if (user) {
+      user.walletBalance = response.data.walletBalance;
+      localStorage.setItem('user', JSON.stringify(user));
+    }
+    return response.data;
+  },
+  getProfile: async () => {
+    const response = await api.get('/auth/profile');
+    return response.data;
+  },
 };
 
 export const ticketService = {
@@ -81,7 +95,15 @@ export const adminService = {
   getAnalytics: async () => {
       const response = await api.get('/admin/analytics');
       return response.data;
-  }
+  },
+  getAuctions: async () => {
+      const response = await api.get('/admin/auctions');
+      return response.data;
+  },
+  closeAuction: async (auctionId) => {
+      const response = await api.post(`/auctions/${auctionId}/close`);
+      return response.data;
+  },
 }
 
 export default api;

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const { User, Bid, Auction } = require('../models');
 const UserRepository = require('../repositories/UserRepository');
 
 /**
@@ -63,6 +63,55 @@ class AuthController {
             } else {
                 res.status(401).json({ message: 'Invalid email or password' });
             }
+        } catch (error) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+
+    /**
+     * POST /api/auth/topup — Add funds to wallet
+     */
+    static async topUp(req, res) {
+        try {
+            const { amount } = req.body;
+            if (!amount || amount <= 0) {
+                return res.status(400).json({ message: 'Amount must be a positive number.' });
+            }
+
+            const user = await User.findByPk(req.user.id);
+            user.walletBalance += amount;
+            await user.save();
+
+            res.json({
+                message: 'Wallet topped up successfully.',
+                walletBalance: user.walletBalance
+            });
+        } catch (error) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+
+    /**
+     * GET /api/auth/profile — Get user profile with bid history
+     */
+    static async getProfile(req, res) {
+        try {
+            const user = await User.findByPk(req.user.id, {
+                attributes: ['id', 'name', 'email', 'walletBalance', 'role', 'createdAt']
+            });
+
+            const bids = await Bid.findAll({
+                where: { bidderId: req.user.id },
+                include: [{
+                    model: Auction,
+                    as: 'auction',
+                    attributes: ['id', 'strategyType', 'status', 'currentHighestBid', 'winningBidderId', 'endTime']
+                }],
+                order: [['createdAt', 'DESC']],
+                limit: 50
+            });
+
+            res.json({ user, bids });
         } catch (error) {
             res.status(500).json({ message: error.message });
         }

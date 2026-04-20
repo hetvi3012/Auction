@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { auctionService, authService } from '../services/api';
+import { auctionService, authService, bidService } from '../services/api';
 import { useSocket } from '../utils/useSocket';
 
 const Auctions = () => {
@@ -60,6 +60,9 @@ const AuctionCard = ({ auction }) => {
   // Integrate real-time socket updates per card
   const { latestBid } = useSocket(auction.id);
   const [currentPrice, setCurrentPrice] = useState(auction.currentHighestBid);
+  const [bidAmount, setBidAmount] = useState('');
+  const [bidding, setBidding] = useState(false);
+  const [message, setMessage] = useState(null); // { type: 'success' | 'error', text: '' }
 
   useEffect(() => {
     if (latestBid && latestBid.amount > currentPrice) {
@@ -68,6 +71,41 @@ const AuctionCard = ({ auction }) => {
   }, [latestBid]);
 
   const isVickrey = auction.strategyType === 'Vickrey';
+
+  const handlePlaceBid = async () => {
+    setMessage(null);
+
+    // Check if user is logged in
+    const user = authService.getCurrentUser();
+    if (!user || !user.token) {
+      setMessage({ type: 'error', text: 'Please log in to place a bid.' });
+      return;
+    }
+
+    const amount = parseFloat(bidAmount);
+    if (!amount || amount <= 0) {
+      setMessage({ type: 'error', text: 'Enter a valid bid amount.' });
+      return;
+    }
+
+    if (amount <= currentPrice) {
+      setMessage({ type: 'error', text: `Bid must be higher than $${currentPrice}.` });
+      return;
+    }
+
+    setBidding(true);
+    try {
+      const result = await bidService.placeBid({ auctionId: auction.id, amount });
+      setCurrentPrice(amount);
+      setBidAmount('');
+      setMessage({ type: 'success', text: 'Bid placed successfully!' });
+    } catch (error) {
+      const errMsg = error.response?.data?.message || error.message || 'Failed to place bid.';
+      setMessage({ type: 'error', text: errMsg });
+    } finally {
+      setBidding(false);
+    }
+  };
 
   return (
     <div className="glass-panel rounded-2xl p-6 flex flex-col h-full hover:shadow-2xl transition-all duration-300 hover:-translate-y-1 group">
@@ -100,10 +138,32 @@ const AuctionCard = ({ auction }) => {
             </p>
           </div>
         </div>
-        
-        <button className="w-full bg-slate-900 hover:bg-slate-800 dark:bg-primary-600 dark:hover:bg-primary-500 text-white font-medium py-2.5 rounded-xl transition-colors">
-          Place Bid
-        </button>
+
+        {message && (
+          <div className={`mb-3 px-3 py-2 rounded-lg text-sm font-medium ${message.type === 'success' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'}`}>
+            {message.text}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <input
+            type="number"
+            placeholder={`Min $${currentPrice + 1}`}
+            value={bidAmount}
+            onChange={(e) => setBidAmount(e.target.value)}
+            className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            min={currentPrice + 1}
+            step="1"
+            disabled={bidding}
+          />
+          <button
+            onClick={handlePlaceBid}
+            disabled={bidding}
+            className="px-5 bg-slate-900 hover:bg-slate-800 dark:bg-primary-600 dark:hover:bg-primary-500 text-white font-medium py-2.5 rounded-xl transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {bidding ? 'Placing...' : 'Bid'}
+          </button>
+        </div>
       </div>
     </div>
   );

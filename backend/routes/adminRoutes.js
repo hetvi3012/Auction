@@ -8,4 +8,7 @@ const router = express.Router();
 // Get real-time analytics dashboard data
 router.get('/analytics', protect, adminGuard, AdminController.getAnalytics);
 
+// Get all auctions for admin management
+router.get('/auctions', protect, adminGuard, AdminController.getAllAuctions);
+
 module.exports = router;
