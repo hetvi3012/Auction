@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:5000/api';
+// Use VITE_API_URL for cloud deployment (Render, etc.) or fall back to localhost
+const API_URL = (import.meta.env.VITE_API_URL || 'http://localhost:5000') + '/api';
 
 const api = axios.create({
   baseURL: API_URL,

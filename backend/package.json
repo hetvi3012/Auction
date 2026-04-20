@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
     "test": "jest --verbose"
   },
   "keywords": [],

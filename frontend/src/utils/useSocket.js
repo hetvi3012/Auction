@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = 'http://localhost:5000';
+// Use VITE_API_URL for cloud deployment or fall back to localhost
+const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export const useSocket = (auctionId) => {
     const [socket, setSocket] = useState(null);
