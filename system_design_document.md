@@ -1,67 +1,89 @@
 # FairPlay Auctions: Comprehensive System Design Document
 
 ## 1. Executive Summary & Purpose
-This document provides a comprehensive architectural and design overview of the **FairPlay Ticket Auction Platform**. It outlines the technology choices, structural patterns, database design, and interaction flows necessary to fulfill the requirements of a high-concurrency, real-time ticket auction system.
+This document provides a comprehensive architectural and design overview of the **FairPlay Ticket Auction Platform**. It outlines the technology choices, structural patterns, database design, interaction flows, Docker deployment, and testing infrastructure necessary to fulfill the requirements of a high-concurrency, real-time ticket auction system.
+
+**Last Updated:** 20 April 2026
 
 ---
 
 ## 2. Architecture Justification ("The Why")
 
-### 2.1 Technology Stack
-*   **React.js (Frontend UI):** Chosen for its component-based architecture enabling a highly responsive, single-page application (SPA). Vite is used over CRA for drastically improved build and HMR (Hot Module Replacement) speeds.
-*   **Node.js & Express.js (Backend API):** Chosen for its non-blocking, event-driven I/O model, which is perfectly suited for managing high volumes of concurrent asynchronous requests—like those generated during the final seconds of a high-demand ticket auction.
-*   **PostgreSQL (Database Layer):** Originally planned as MongoDB, migrated to **PostgreSQL**. Why? Ticket auctions and wallet settlements require strict, guaranteed **ACID properties** (Atomicity, Consistency, Isolation, Durability) at the database level. Relational databases with explicit row-locking prevent race conditions (e.g., two users bidding the exact same amount at the exact same millisecond).
-*   **Socket.io (Real-Time Engine):** Long-polling fallbacks and WebSocket abstraction. Essential for broadcasting live price updates to all connected clients viewing an auction instantly, eliminating the need for inefficient HTTP polling.
+### 2.1 Architecture Style
+The platform follows a **Layered (N-Tier) Monolithic Architecture** — see [ARCHITECTURE.md](ARCHITECTURE.md) for the full breakdown. The backend is organized into 5 horizontal layers: Presentation → Controller → Business Logic → Data Access → Infrastructure.
 
-### 2.2 Design Patterns (GoF)
-We strictly adhered to Gang of Four (GoF) principles to keep the complex backend logic maintainable:
-1.  **Strategy Pattern:** Used to isolate the logic between English (Ascending) and Vickrey (Sealed-bid) auctions. This allows the system to easily add a "Dutch Auction" or "Buy It Now" model later without altering core bid processing code.
-2.  **Observer Pattern:** Used to decouple the REST API bid-processing logic from the WebSocket broadcasting logic. When a bid saves to DB, it emits an event. The WebSocket service "observes" this and pushes it to clients without the HTTP route needing to know about WebSockets.
-3.  **Mediator Pattern:** Used in the [AuctionSettlementService](file:///d:/6th%20sem/Software/Project/backend/services/AuctionSettlementService.js#5-90). It encapsulates the complex interactions between Users (Wallets), Tickets (Ownership), and Auctions (Status) during the escrow checkout phase inside a single transactional boundary.
+### 2.2 Technology Stack
+*   **React.js (Frontend UI):** Chosen for its component-based architecture enabling a highly responsive, single-page application (SPA). Vite 8 is used for instant server start and lightning-fast HMR.
+*   **Node.js & Express.js (Backend API):** Chosen for its non-blocking, event-driven I/O model, which is perfectly suited for managing high volumes of concurrent asynchronous requests—like those generated during the final seconds of a high-demand ticket auction.
+*   **PostgreSQL (Database Layer):** Ticket auctions and wallet settlements require strict, guaranteed **ACID properties** (Atomicity, Consistency, Isolation, Durability) at the database level. Row-locking (`SELECT ... FOR UPDATE`) prevents race conditions during concurrent bid placements.
+*   **Socket.io (Real-Time Engine):** WebSocket abstraction with long-polling fallbacks. Essential for broadcasting live price updates to all connected clients instantly, eliminating the need for inefficient HTTP polling.
+*   **Redis + BullMQ (Background Processing):** Distributed job queues for asynchronous post-settlement tasks like winner email notifications and receipt PDF generation.
+*   **Docker + Docker Compose (Containerization):** Multi-container deployment with health checks, dependency ordering, and persistent volumes.
+
+### 2.3 Design Patterns (GoF)
+The backend implements **10 Gang of Four (GoF) design patterns** across the business logic layer:
+
+| Pattern | Category | Implementation | Purpose |
+|---------|----------|---------------|---------|
+| Strategy | Behavioral | `EnglishAuctionStrategy`, `VickreyAuctionStrategy`, `AuctionContext` | Isolates bidding rules per auction type; easily extensible for new types |
+| Observer | Behavioral | `AuctionSubject`, `NotificationService`, `WebSocketBroadcaster` | Decouples REST bid processing from WebSocket broadcasting |
+| Command | Behavioral | `CommandInvoker`, `CreateAuctionCommand`, `PlaceBidCommand`, `SettleAuctionCommand` | Encapsulates operations as objects with undo/history tracking |
+| Factory | Creational | `StrategyFactory`, `AuctionFactory` | Centralizes object creation with validation |
+| Builder | Creational | `AuctionBuilder` | Step-by-step auction configuration with field validation |
+| Decorator | Structural | `LoggingDecorator`, `ValidationDecorator` | Adds cross-cutting concerns transparently |
+| Facade | Structural | `AuctionFacade` | Single entry point for all controller operations |
+| Chain of Responsibility | Behavioral | `BidValidationChain` (5 handlers) | Sequential pre-bid validation chain |
+| Mediator | Behavioral | `AuctionSettlementService` | Multi-entity transactional settlement coordination |
+| Repository | Architectural | `BaseRepository` + 4 domain repos | Database-agnostic data access abstraction |
 
 ---
 
 ## 3. High-Level System Architecture Diagram
-
-This diagram shows how the client interacts with our backend services.
 
 ```mermaid
 graph TD
     Client[React Client SPA] <-->|HTTP REST| API[Express API Gateway]
     Client <-->|WebSockets| WSS[Socket.io Server]
     
-    API --> Auth[Auth Service / JWT]
-    API --> AuctionCtrl[Auction Controller]
-    API --> BidCtrl[Bid Controller]
+    API --> Auth[Auth Middleware / JWT]
+    API --> RBAC[Role Middleware / ADMIN]
+    Auth --> Facade[AuctionFacade]
+    RBAC --> Facade
     
-    BidCtrl --> Strategy{Auction Strategy Context}
-    Strategy --> English[English Logic]
-    Strategy --> Vickrey[Vickrey Logic]
+    Facade --> Commands[Command Invoker]
+    Commands --> Strategy{Strategy Context}
+    Strategy --> English[English Auction Strategy]
+    Strategy --> Vickrey[Vickrey Auction Strategy]
     
-    BidCtrl -.->|Notifies| Observer[Observer Registry]
+    Commands --> Validators[Validation Chain + Decorators]
+    Commands --> Settlement[Settlement Service / Mediator]
+    
+    Commands -.->|Notifies| Observer[Observer Subject]
     Observer -.->|Triggers| WSS
+    Observer -.->|Logs| Notify[Notification Service]
     
-    API --> Med[Mediator: Settlement Service]
-    Med <--> DB[(PostgreSQL Database)]
-    AuctionCtrl <--> DB
-    BidCtrl <--> DB
+    Settlement <--> DB[(PostgreSQL)]
+    Commands <--> Repos[Repository Layer]
+    Repos <--> DB
+    
+    Settlement -.->|Async Jobs| Redis[(Redis / BullMQ)]
 ```
 
 ---
 
 ## 4. Database Entity Relationship Diagram (ERD)
 
-The relational schema ensuring data integrity.
-
 ```mermaid
 erDiagram
     USER ||--o{ TICKET : "sells"
     USER ||--o{ BID : "places"
     USER ||--o{ AUCTION : "wins"
+    USER ||--o{ PROXY_BID_LIMIT : "sets"
     
     TICKET ||--o| AUCTION : "listed in"
     
     AUCTION ||--o{ BID : "receives"
+    AUCTION ||--o{ PROXY_BID_LIMIT : "has"
     
     USER {
         uuid id PK
@@ -69,6 +91,7 @@ erDiagram
         string email UK
         string passwordHash
         float walletBalance
+        enum role "USER, ADMIN"
         boolean isVerified
     }
     
@@ -99,22 +122,44 @@ erDiagram
         float amount
         datetime timestamp
     }
+
+    PROXY_BID_LIMIT {
+        uuid id PK
+        uuid auctionId FK
+        uuid bidderId FK
+        float maxWillingToPay
+    }
 ```
 
 ---
 
 ## 5. Detailed UML & Interaction Sequences
 
-### 5.1 Class Diagram (Strategy Pattern Implementation)
-This displays how the system processes bids dynamically based on the auction type.
+### 5.1 Class Diagram (Strategy + Command Pattern)
 
 ```mermaid
 classDiagram
+    class AuctionFacade {
+      +createAuction(params, sellerId)
+      +placeBid(auctionId, amount, userId)
+      +settleAuction(auctionId)
+      +getActiveAuctions()
+      +setProxyBidLimit(auctionId, userId, max)
+      +getAnalytics()
+    }
+
+    class CommandInvoker {
+      -history[]
+      +executeCommand(command)
+      +getHistory()
+      +clearHistory()
+    }
+
     class AuctionContext {
       -AuctionStrategy strategy
-      +setStrategy(strategyType: String)
-      +validateBid(currentHighest: Float, newBid: Float, walletBal: Float): Boolean
-      +determineWinnerAndPrice(bids: Bid[]): SettlementDetails
+      +setStrategy(strategyType)
+      +validateBid(currentHighest, newBid, walletBal)
+      +determineWinnerAndPrice(bids)
     }
     
     class AuctionStrategy {
@@ -124,28 +169,32 @@ classDiagram
     }
     
     class EnglishAuctionStrategy {
-      +validateBid() // Ensures newBid > currentHighest
-      +determineWinnerAndPrice() // Returns highest bid
+      +validateBid()
+      +determineWinnerAndPrice()
     }
     
     class VickreyAuctionStrategy {
-      +validateBid() // Ensures walletBal >= newBid, accepts hidden bids
-      +determineWinnerAndPrice() // Returns highest bidder, second highest price
+      +validateBid()
+      +determineWinnerAndPrice()
     }
 
-    AuctionContext "1" *-- "1" AuctionStrategy : Uses
-    AuctionStrategy <|.. EnglishAuctionStrategy : Implements
-    AuctionStrategy <|.. VickreyAuctionStrategy : Implements
+    AuctionFacade --> CommandInvoker : uses
+    CommandInvoker --> AuctionContext : via commands
+    AuctionContext "1" *-- "1" AuctionStrategy : delegates
+    AuctionStrategy <|.. EnglishAuctionStrategy : implements
+    AuctionStrategy <|.. VickreyAuctionStrategy : implements
 ```
 
 ### 5.2 Sequence Diagram: Real-Time Bidding Flow
-This sequence demonstrates the REST POST request coupled with the Observer pattern for WebSocket broadcasting.
 
 ```mermaid
 sequenceDiagram
     participant UI as React Client
     participant API as Express Router
-    participant Context as AuctionContext
+    participant MW as Auth Middleware
+    participant Facade as AuctionFacade
+    participant Chain as ValidationChain
+    participant Cmd as PlaceBidCommand
     participant DB as PostgreSQL
     participant Observer as AuctionSubject
     participant WS as Socket.io Server
@@ -153,38 +202,50 @@ sequenceDiagram
 
     UI->>API: POST /api/bids { auctionId, amount }
     activate API
+    API->>MW: protect() — verify JWT
+    MW-->>API: req.user set
     
-    API->>DB: BEGIN TRANSACTION
-    API->>DB: Fetch Auction (FOR UPDATE lock)
-    API->>Context: setStrategy(auction.strategy)
-    API->>Context: validateBid(amount)
-    Context-->>API: Valid = true
+    API->>Facade: placeBid(auctionId, amount, userId)
+    Facade->>Chain: ValidationDecorator + BidValidationChain
+    Chain-->>Facade: All validations pass
     
-    API->>DB: Update Auction (currentHighestBid)
-    API->>DB: Insert new Bid
-    API->>DB: COMMIT TRANSACTION
+    Facade->>Cmd: CommandInvoker.executeCommand(PlaceBidCommand)
+    activate Cmd
     
-    API->>Observer: notifyNewBid({ amount, user })
+    Cmd->>DB: BEGIN TRANSACTION
+    Cmd->>DB: Fetch Auction (FOR UPDATE lock)
+    Cmd->>DB: Validate via AuctionContext.validateBid()
+    Cmd->>DB: Update Auction (currentHighestBid)
+    Cmd->>DB: Insert new Bid
+    Cmd->>DB: ProxyBiddingEngine.processProxyBids()
+    Cmd->>DB: COMMIT TRANSACTION
+    
+    Cmd->>Observer: notifyNewBid({ amount, user })
     Observer->>WS: Broadcast to Room (auctionId)
     WS->>Clients: 'new_bid' event payload
     
-    API-->>UI: 201 Created (Success)
+    Cmd-->>API: 201 Created (Success)
+    deactivate Cmd
     deactivate API
     
     Note over Clients,UI: UI instantly updates to show the new price
 ```
 
 ### 5.3 Sequence Diagram: Auction Settlement (Mediator)
-This diagram maps out exactly what happens when time runs out on an auction, handled by the [AuctionSettlementService](file:///d:/6th%20sem/Software/Project/backend/services/AuctionSettlementService.js#5-90).
 
 ```mermaid
 sequenceDiagram
-    participant Cron as Scheduler/Manual Close
+    participant Cron as Scheduler / Admin Close
+    participant Cmd as SettleAuctionCommand
     participant Med as SettlementService (Mediator)
     participant DB as PostgreSQL
-    participant Strat as Valuation Strategy
+    participant Strat as Strategy Context
+    participant Queue as Redis / BullMQ
+    participant WS as Socket.io
 
-    Cron->>Med: settleAuction(auctionId)
+    Cron->>Cmd: CommandInvoker.executeCommand()
+    activate Cmd
+    Cmd->>Med: settleAuction(auctionId)
     activate Med
     
     Med->>DB: BEGIN TRANSACTION
@@ -197,7 +258,6 @@ sequenceDiagram
     
     Med->>DB: Fetch Buyer Wallet (Lock)
     Med->>DB: UPDATE Buyer Wallet: Balance -= finalPrice
-    
     Med->>DB: Fetch Seller Wallet (Lock)
     Med->>DB: UPDATE Seller Wallet: Balance += finalPrice
     
@@ -207,13 +267,66 @@ sequenceDiagram
     
     Med->>DB: COMMIT TRANSACTION
     
-    Med-->>Cron: Success / Failure
+    Med->>Queue: SendWinnerEmail (async)
+    Med->>Queue: GenerateReceipt (async)
+    Med->>WS: notifyAuctionClosed()
+    
+    Med-->>Cmd: Success
     deactivate Med
+    deactivate Cmd
 ```
 
 ---
 
 ## 6. Security Considerations & Protections
-*   **Race Conditions:** Mitigated using PostgreSQL explicit locks (`SELECT ... FOR UPDATE`) during bid placements and checkout to prevent DB inconsistencies when 100 users bid simultaneously.
-*   **JWT Authentication:** All sensitive routes (bidding, selling, wallet access) restrict execution via a Bearer token verification middleware.
-*   **Escrow Safety:** The Settlement mediator forces an all-or-nothing rollback. If transferring the ticket fails due to an error, the buyer's funds are instantly rolled back in the transaction.
+
+| Threat | Mitigation |
+|--------|-----------|
+| **Race Conditions** | PostgreSQL explicit locks (`SELECT ... FOR UPDATE`) during bid placements and settlement within database transactions |
+| **Unauthorized Access** | JWT authentication via `authMiddleware.protect()` on all sensitive routes |
+| **Privilege Escalation** | RBAC via `roleMiddleware.adminGuard()` restricting admin routes to `ADMIN` role |
+| **Escrow Fraud** | Settlement mediator forces all-or-nothing rollback — if any step fails, all wallet changes revert |
+| **Password Security** | bcrypt hashing with salts in User model `beforeCreate` hook |
+| **XSS/Injection** | Express `express.json()` body parsing; Sequelize parameterized queries prevent SQL injection |
+
+---
+
+## 7. Containerization & Deployment
+
+### 7.1 Docker Architecture
+
+| Container | Image | Port | Purpose |
+|-----------|-------|------|---------|
+| `fairplay-frontend` | `nginx:alpine` | 80 | Serves React build + proxies API/WS |
+| `fairplay-backend` | `node:20-alpine` | 5000 | Express API + Socket.io server |
+| `fairplay-db` | `postgres:16-alpine` | 5432 | PostgreSQL with persistent volume |
+| `fairplay-redis` | `redis:7-alpine` | 6379 | BullMQ job queues |
+
+### 7.2 Running with Docker
+
+```bash
+# Build and start all services
+docker-compose up --build
+
+# Run in background
+docker-compose up -d
+
+# View logs
+docker-compose logs -f backend
+
+# Stop all
+docker-compose down
+```
+
+---
+
+## 8. Testing Infrastructure
+
+| Metric | Backend | Frontend | Total |
+|--------|---------|----------|-------|
+| **Framework** | Jest 30.3 | Vitest 4.1 | — |
+| **Test Suites** | 27 | 9 | **36** |
+| **Tests** | 190 | 67+ | **257+** |
+| **Pass Rate** | 100% | 100% | **100%** |
+
+See [TEST_DOCUMENTATION.md](TEST_DOCUMENTATION.md) for the full exhaustive test report.
